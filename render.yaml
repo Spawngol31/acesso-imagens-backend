@@ -1,21 +1,7 @@
-# render.yaml (VERSÃO FINAL - IGNORE OS ERROS DO VS CODE)
+# render.yaml (VERSÃO FINAL E CORRETA)
 
-# 1. Primeiro, definimos os nossos "addons" de infraestrutura
-databases:
-  - name: postgres-db
-    databaseName: acesso_imagens_db
-    user: acesso_imagens_user
-    plan: free
-
-redis:
-  - name: redis-service
-    plan: free
-    ipAllowList:
-      - source: 0.0.0.0/0
-        description: "Permitir todas as ligações"
-
-# 2. Depois, definimos os nossos serviços de aplicação
 services:
+  # 1. O nosso Servidor Web (Django + Gunicorn)
   - type: web
     name: django-backend
     runtime: python
@@ -24,16 +10,19 @@ services:
     startCommand: "gunicorn config.wsgi"
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
+        fromService:
+          type: pserv
           name: postgres-db
           property: connectionString
       - key: CELERY_BROKER_URL
-        fromRedis:
+        fromService:
+          type: redis
           name: redis-service
           property: connectionString
       - key: PYTHON_VERSION
         value: 3.11.4 # Ajuste se a sua versão for diferente
 
+  # 2. O nosso "Trabalhador" de Fundo (Celery Worker)
   - type: worker
     name: celery-worker
     runtime: python
@@ -42,12 +31,31 @@ services:
     startCommand: "celery -A config worker -l info -P gevent"
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
+        fromService:
+          type: pserv
           name: postgres-db
           property: connectionString
       - key: CELERY_BROKER_URL
-        fromRedis:
+        fromService:
+          type: redis
           name: redis-service
           property: connectionString
       - key: PYTHON_VERSION
         value: 3.11.4 # Ajuste se a sua versão for diferente
+  
+  # 3. A nossa Base de Dados PostgreSQL (declarada como um serviço privado)
+  - type: pserv
+    name: postgres-db
+    plan: free
+    postgres:
+      version: 14
+
+  # 4. O nosso servidor Redis (declarado como um serviço privado)
+  - type: pserv
+    name: redis-service
+    plan: free
+    redis:
+      version: 7
+    ipAllowList:
+      - cidr: 0.0.0.0/0
+        description: "Permitir todas as ligações"
