@@ -1,0 +1,53 @@
+# render.yaml (VERSÃO FINAL - IGNORE OS ERROS DO VS CODE)
+
+# 1. Primeiro, definimos os nossos "addons" de infraestrutura
+databases:
+  - name: postgres-db
+    databaseName: acesso_imagens_db
+    user: acesso_imagens_user
+    plan: free
+
+redis:
+  - name: redis-service
+    plan: free
+    ipAllowList:
+      - source: 0.0.0.0/0
+        description: "Permitir todas as ligações"
+
+# 2. Depois, definimos os nossos serviços de aplicação
+services:
+  - type: web
+    name: django-backend
+    runtime: python
+    plan: free
+    buildCommand: "./build.sh"
+    startCommand: "gunicorn config.wsgi"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: postgres-db
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromRedis:
+          name: redis-service
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.11.4 # Ajuste se a sua versão for diferente
+
+  - type: worker
+    name: celery-worker
+    runtime: python
+    plan: free
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "celery -A config worker -l info -P gevent"
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: postgres-db
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromRedis:
+          name: redis-service
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.11.4 # Ajuste se a sua versão for diferente

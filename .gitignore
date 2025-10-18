@@ -1,0 +1,17 @@
+# Arquivo .gitignore para o Backend Django
+
+# Ambiente Virtual
+venv/
+
+# Segredos
+.env
+
+# Base de dados local
+db.sqlite3
+
+# Ficheiros de cache do Python
+__pycache__/
+*.pyc
+
+# Logs e outros
+*.log
