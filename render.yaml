@@ -55,5 +55,5 @@ services:
     name: redis-service
     plan: free
     ipAllowList:
-      - source: 0.0.0.0/0
+      - source: 0.0.0.0/0 # Esta é a sintaxe correta (source, não cidr)
         description: "Permitir todas as ligações"
