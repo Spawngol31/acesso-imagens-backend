@@ -35,7 +35,19 @@ SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS_STRING = os.getenv('DJANGO_ALLOWED_HOSTS')
+
+if ALLOWED_HOSTS_STRING:
+    # Pega na string "site1.com,site2.com" e transforma-a numa lista ['site1.com', 'site2.com']
+    ALLOWED_HOSTS = ALLOWED_HOSTS_STRING.split(',')
+else:
+    # Se a variável não estiver definida, usa uma lista vazia
+    ALLOWED_HOSTS = []
+
+# Se estivermos em desenvolvimento local (DEBUG=True), adiciona o localhost
+if DEBUG:
+    ALLOWED_HOSTS.append('localhost')
+    ALLOWED_HOSTS.append('127.0.0.1')
 
 
 # Application definition
