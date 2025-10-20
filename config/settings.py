@@ -1,5 +1,4 @@
 # config/settings.py
-
 from pathlib import Path
 from dotenv import load_dotenv
 import os
@@ -11,9 +10,9 @@ dotenv_path = BASE_DIR / '.env'
 load_dotenv(dotenv_path=dotenv_path)
 
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-# --- LÓGICA DE HOSTS E ORIGENS (PRONTA PARA PROD) ---
+# Lógica de DEBUG e HOSTS
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
 ALLOWED_HOSTS_STRING = os.getenv('DJANGO_ALLOWED_HOSTS', '')
 ALLOWED_HOSTS = []
@@ -22,48 +21,7 @@ if ALLOWED_HOSTS_STRING:
 if DEBUG:
     ALLOWED_HOSTS.extend(['localhost', '127.0.0.1'])
 
-CORS_ALLOWED_ORIGINS_STRING = os.getenv('CORS_ALLOWED_ORIGINS', '')
-CORS_ALLOWED_ORIGINS = []
-if CORS_ALLOWED_ORIGINS_STRING:
-    CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_STRING.split(',')
-if DEBUG:
-    CORS_ALLOWED_ORIGINS.extend([
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ])
-
-CSRF_TRUSTED_ORIGINS_STRING = os.getenv('CSRF_TRUSTED_ORIGINS', '')
-CSRF_TRUSTED_ORIGINS = []
-if CSRF_TRUSTED_ORIGINS_STRING:
-    CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED_ORIGINS_STRING.split(',')
-if DEBUG:
-    CSRF_TRUSTED_ORIGINS.extend([
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-    ])
-
-# --- CORREÇÃO DE CORS (A PARTE MAIS IMPORTANTE) ---
-CORS_ALLOW_CREDENTIALS = True
-# Diz ao backend para aceitar o cabeçalho 'Authorization'
-CORS_ALLOW_HEADERS = [
-    'accept',
-    'authorization',
-    'content-type',
-    'origin',
-]
-# Diz ao backend para aceitar todos os métodos de API
-CORS_ALLOW_METHODS = [
-    'DELETE',
-    'GET',
-    'OPTIONS',
-    'PATCH',
-    'POST',
-    'PUT',
-]
-# --------------------------------------------------
-
+# Application definition
 INSTALLED_APPS = [
     'admin_interface',
     'colorfield',
@@ -82,14 +40,13 @@ INSTALLED_APPS = [
     'perfis.apps.PerfisConfig',
     'storages',
     'core.apps.CoreConfig',
-    # 'blog.apps.BlogConfig', # Comentado, pois usámos o WordPress
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
-    'corsheaders.middleware.CorsMiddleware', # Posição correta
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -101,7 +58,8 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [], 'APP_DIRS': True,
+        'DIRS': [],
+        'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
                 'django.template.context_processors.request',
@@ -131,21 +89,26 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'pt-BR'
-TIME_ZONE = 'UTC-3'
+TIME_ZONE = 'UTC'
 USE_I18N = True
 USE_TZ = True
 
-# Static and Media
+# Static files (CSS, JavaScript, Images)
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STORAGES = {
-    "default": { "BACKEND": "config.storages.PublicMediaStorage" },
-    "staticfiles": { "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage" },
+    "default": {
+        "BACKEND": "config.storages.PublicMediaStorage",
+    },
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+    },
 }
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTH_USER_MODEL = 'contas.Usuario'
 
-# --- API e Segurança ---
+# --- CONFIGURAÇÕES DE API E SEGURANÇA ---
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -153,7 +116,32 @@ REST_FRAMEWORK = {
     ],
 }
 
-# --- Chaves Externas ---
+# Configuração de CORS (Segurança entre domínios)
+CORS_ALLOWED_ORIGINS_STRING = os.getenv('CORS_ALLOWED_ORIGINS', '')
+CORS_ALLOWED_ORIGINS = []
+if CORS_ALLOWED_ORIGINS_STRING:
+    CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_STRING.split(',')
+if DEBUG:
+    CORS_ALLOWED_ORIGINS.extend([
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ])
+CORS_ALLOW_CREDENTIALS = True
+
+# Configuração de CSRF (Segurança para Sessões)
+CSRF_TRUSTED_ORIGINS_STRING = os.getenv('CSRF_TRUSTED_ORIGINS', '')
+CSRF_TRUSTED_ORIGINS = []
+if CSRF_TRUSTED_ORIGINS_STRING:
+    CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED_ORIGINS_STRING.split(',')
+if DEBUG:
+    CSRF_TRUSTED_ORIGINS.extend([
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ])
+
+# --- CHAVES DE API EXTERNAS ---
 AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
 AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
 AWS_STORAGE_BUCKET_NAME = os.getenv('AWS_STORAGE_BUCKET_NAME')
@@ -165,9 +153,12 @@ AWS_REKOGNITION_COLLECTION_ID = os.getenv('AWS_REKOGNITION_COLLECTION_ID')
 AWS_REKOGNITION_REGION_NAME = os.getenv('AWS_REKOGNITION_REGION_NAME')
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
+
+# --- CONFIGURAÇÕES DE E-MAIL ---
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'contato@acessoimagens.com.br')
 if DEBUG:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 else:
-    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend' # Mudar para SendGrid/etc
+    # Em produção, você mudará isto para SendGrid ou similar
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
