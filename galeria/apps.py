@@ -1,10 +1,12 @@
+# galeria/apps.py
+
 from django.apps import AppConfig
 
-
-class GaleriaConfig(AppConfig):
+# --- CORREÇÃO AQUI ---
+class GaleriaConfig(AppConfig): # Corrigido de AppAppConfig para AppConfig
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'galeria'
 
-# Adicione este método
     def ready(self):
+        # Importa os signals para que eles sejam registados
         import galeria.signals

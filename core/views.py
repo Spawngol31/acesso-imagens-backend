@@ -4,12 +4,12 @@ from PIL import Image
 from django.conf import settings
 from django.core.mail import send_mail
 from django.http import HttpResponse
-from django.shortcuts import render
+#from django.shortcuts import render
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from loja.permissions import IsFotografo
+from contas.permissions import IsFotografoOrAdmin
 
 class ContactFormView(APIView):
     permission_classes = [AllowAny]
@@ -44,7 +44,7 @@ class ContactFormView(APIView):
             return Response({'error': f'Erro ao enviar e-mail: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class WatermarkToolView(APIView):
-    permission_classes = [IsAuthenticated, IsFotografo]
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def post(self, request):
         imagem_original_file = request.FILES.get('imagem')
@@ -88,3 +88,4 @@ class WatermarkToolView(APIView):
 
         except Exception as e:
             return Response({'error': f'Erro ao processar a imagem: {e}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        

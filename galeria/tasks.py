@@ -1,5 +1,4 @@
 # galeria/tasks.py
-
 import os
 import boto3
 import ffmpeg
@@ -10,8 +9,7 @@ from PIL import Image, ImageOps
 from celery import shared_task
 from django.conf import settings
 from django.core.files.base import ContentFile
-from .models import Foto, FaceIndexada, Video
-
+from .models import Foto, FaceIndexada, Video # 'Album' foi removido desta linha
 
 @shared_task
 def processar_foto_task(foto_id):
@@ -137,7 +135,7 @@ def gerar_miniatura_video_task(video_id):
             .input(temp_video_path, ss=1)
             .output(temp_thumb_path, vframes=1)
             .overwrite_output()
-            .run(cmd='C:/ffmpeg/bin/ffmpeg.exe', capture_stdout=True, capture_stderr=True)
+            .run(cmd='C:/ffmpeg/bin/ffmpeg.exe', capture_stdout=True, capture_stderr=True) # Confirme se este caminho do ffmpeg está correto
         )
 
         with open(temp_thumb_path, 'rb') as thumb_f:
@@ -159,4 +157,3 @@ def gerar_miniatura_video_task(video_id):
             os.remove(temp_video_path)
         if temp_thumb_path and os.path.exists(temp_thumb_path):
             os.remove(temp_thumb_path)
-            

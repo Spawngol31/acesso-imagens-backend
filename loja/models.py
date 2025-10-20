@@ -1,4 +1,5 @@
 # loja/models.py
+
 from django.db import models
 from django.utils import timezone
 from datetime import timedelta
@@ -6,7 +7,6 @@ from contas.models import Usuario
 from galeria.models import Foto
 
 class Carrinho(models.Model):
-    # Usamos OneToOneField para garantir que cada cliente tenha apenas um carrinho.
     cliente = models.OneToOneField(Usuario, on_delete=models.CASCADE, related_name='carrinho')
     criado_em = models.DateTimeField(auto_now_add=True)
     cupom = models.ForeignKey('Cupom', on_delete=models.SET_NULL, null=True, blank=True)
@@ -20,7 +20,6 @@ class ItemCarrinho(models.Model):
     adicionado_em = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        # Garante que a mesma foto não possa ser adicionada duas vezes no mesmo carrinho
         unique_together = ('carrinho', 'foto')
 
     def __str__(self):
@@ -29,9 +28,9 @@ class ItemCarrinho(models.Model):
 
 class Pedido(models.Model):
     class StatusPedido(models.TextChoices):
-            PENDENTE = 'PENDENTE', 'Pendente'
-            PAGO = 'PAGO', 'Pago'
-            FALHOU = 'FALHOU', 'Falhou'
+        PENDENTE = 'PENDENTE', 'Pendente'
+        PAGO = 'PAGO', 'Pago'
+        FALHOU = 'FALHOU', 'Falhou'
 
     cliente = models.ForeignKey(Usuario, on_delete=models.SET_NULL, null=True, related_name='pedidos')
     valor_total = models.DecimalField(max_digits=10, decimal_places=2)
@@ -40,14 +39,13 @@ class Pedido(models.Model):
     criado_em = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        # Verifica se o cliente existe antes de tentar aceder ao seu email
         if self.cliente:
             return f"Pedido {self.id} - {self.cliente.email}"
         return f"Pedido {self.id} - (Cliente Apagado)"
 
 class ItemPedido(models.Model):
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name='itens')
-    foto = models.ForeignKey(Foto, on_delete=models.PROTECT) # PROTECT para não deletar uma foto já comprada
+    foto = models.ForeignKey(Foto, on_delete=models.PROTECT) # PROTECT é perfeito aqui
     preco = models.DecimalField(max_digits=10, decimal_places=2)
 
     def __str__(self):
@@ -60,7 +58,7 @@ class FotoComprada(models.Model):
     data_expiracao = models.DateTimeField()
 
     def save(self, *args, **kwargs):
-        if not self.id: # Só define a data de expiração na criação
+        if not self.id: 
             self.data_expiracao = timezone.now() + timedelta(days=60)
         super().save(*args, **kwargs)
 
@@ -78,14 +76,14 @@ class Cupom(models.Model):
     data_validade = models.DateField(blank=True, null=True)
     
     # --- CAMPO CORRIGIDO ---
-    # Adicionamos null=True e blank=True para tornar o campo opcional
+    # Removemos null=True e blank=True. Um cupom DEVE pertencer a um fotógrafo.
     fotografo = models.ForeignKey(
         Usuario, 
         on_delete=models.CASCADE, 
         related_name='cupons',
-        limit_choices_to={'papel': Usuario.Papel.FOTOGRAFO},
-        null=True,
-        blank=True
+        limit_choices_to={'papel': Usuario.Papel.FOTOGRAFO}
+        # null=True, # Removido
+        # blank=True # Removido
     )
 
     def __str__(self):

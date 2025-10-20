@@ -1,26 +1,26 @@
 # contas/serializers.py
 
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .models import Usuario
 from perfis.serializers import PerfilClienteSerializer, PerfilFotografoSerializer
 
 class UsuarioSerializer(serializers.ModelSerializer):
     class Meta:
         model = Usuario
-        fields = ['id', 'username', 'email', 'nome_completo', 'papel']
+        fields = ['id', 'email', 'nome_completo', 'papel']
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password2 = serializers.CharField(style={'input_type': 'password'}, write_only=True)
 
     class Meta:
         model = Usuario
-        fields = ['username', 'email', 'nome_completo', 'password', 'password2']
+        fields = ['email', 'nome_completo', 'password', 'password2']
         extra_kwargs = { 'password': {'write_only': True} }
 
     def save(self):
         user = Usuario(
             email=self.validated_data['email'],
-            username=self.validated_data['username'],
             nome_completo=self.validated_data['nome_completo']
         )
         password = self.validated_data['password']
@@ -38,7 +38,7 @@ class UserAdminSerializer(serializers.ModelSerializer):
     class Meta:
         model = Usuario
         fields = [
-            'id', 'username', 'email', 'nome_completo', 'papel', 'is_active',
+            'id', 'email', 'nome_completo', 'papel', 'is_active',
             'perfil_cliente', 'perfil_fotografo'
         ]
     
@@ -66,3 +66,18 @@ class UserAdminSerializer(serializers.ModelSerializer):
             perfil_serializer.save()
 
         return instance
+    
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Personaliza o token JWT para incluir o papel do utilizador e o nome.
+    O login continua a ser feito pelo USERNAME_FIELD (que definimos como email).
+    """
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+
+        # Adiciona dados personalizados ao token
+        token['nome_completo'] = user.nome_completo
+        token['papel'] = user.papel
+
+        return token

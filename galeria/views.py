@@ -1,183 +1,141 @@
-from django.shortcuts import render
-
 # galeria/views.py
+
 import boto3
 from django.conf import settings
+from rest_framework import generics, viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework import status
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser
-from .permissions import IsFotografo
-from .serializers import FotoUploadSerializer
-from rest_framework import generics
-from rest_framework.permissions import AllowAny
-from .models import Album, Foto, Video
-from .models import FaceIndexada
+from rest_framework.permissions import IsAuthenticated, AllowAny
+
+# Importa os modelos
+from .models import Album, Foto, Video, FaceIndexada
+
+# Importa os serializers
 from .serializers import (
-    AlbumDashboardSerializer, FotoDashboardSerializer, 
-    VideoDashboardSerializer, VideoUploadSerializer
+    AlbumSerializer, 
+    AlbumDetailSerializer, 
+    FotoSerializer,
+    FotoUploadSerializer,
+    VideoUploadSerializer,
+    AlbumDashboardSerializer,
+    FotoDashboardSerializer,
+    VideoDashboardSerializer
 )
-from .serializers import AlbumSerializer, AlbumDetailSerializer, FotoSerializer
 
-class FotoUploadView(APIView):
-    # Parsers para lidar com upload de arquivos
-    parser_classes = [MultiPartParser, FormParser]
-    # Garante que o usuário está logado E é um fotógrafo
-    permission_classes = [IsAuthenticated, IsFotografo]
-
-    def post(self, request, format=None):
-        serializer = FotoUploadSerializer(data=request.data)
-        if serializer.is_valid():
-            # Antes de salvar, vamos garantir que o fotógrafo só pode adicionar
-            # fotos em seus próprios álbuns.
-            album = serializer.validated_data['album']
-            if album.fotografo != request.user:
-                return Response(
-                    {'error': 'Você não tem permissão para adicionar fotos a este álbum.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-class FotoViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint que permite aos fotógrafos ver, editar e deletar
-    suas próprias fotos.
-    """
-    serializer_class = FotoDashboardSerializer
-    permission_classes = [IsAuthenticated, IsFotografo]
-    
-    # Limitamos as ações. A criação (POST) ainda é feita pelo endpoint de upload.
-    http_method_names = ['get', 'put', 'patch', 'delete', 'head', 'options']
-
-    def get_queryset(self):
-        """
-        ESSENCIAL: Garante que a ViewSet retorne apenas as fotos
-        que pertencem a álbuns do fotógrafo logado.
-        """
-        return Foto.objects.filter(album__fotografo=self.request.user).order_by('-data_upload')
-
-class VideoUploadView(APIView):
-    """
-    Endpoint para o fotógrafo fazer o upload de um novo vídeo e sua miniatura.
-    """
-    parser_classes = [MultiPartParser, FormParser]
-    permission_classes = [IsAuthenticated, IsFotografo]
-
-    def post(self, request, format=None):
-        serializer = VideoUploadSerializer(data=request.data)
-        if serializer.is_valid():
-            album = serializer.validated_data['album']
-            if album.fotografo != request.user:
-                return Response(
-                    {'error': 'Você não tem permissão para adicionar vídeos a este álbum.'},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-            
-            serializer.save()
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+# --- CORREÇÃO DA IMPORTAÇÃO ---
+# As permissões agora vêm do app 'contas'
+from contas.permissions import IsFotografoOrAdmin, IsAdminUser
+from contas.models import Usuario
 
 
-class VideoViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint que permite aos fotógrafos ver, editar e deletar
-    seus próprios vídeos.
-    """
-    serializer_class = VideoDashboardSerializer
-    permission_classes = [IsAuthenticated, IsFotografo]
-    http_method_names = ['get', 'put', 'patch', 'delete', 'head', 'options']
-
-    def get_queryset(self):
-        """
-        Garante que a ViewSet retorne apenas os vídeos
-        que pertencem a álbuns do fotógrafo logado.
-        """
-        return Video.objects.filter(album__fotografo=self.request.user).order_by('-data_upload')
+# --- VIEWS PÚBLICAS (PARA OS CLIENTES) ---
 
 class AlbumListView(generics.ListAPIView):
-    """
-    View para listar todos os álbuns.
-    Qualquer pessoa pode ver a lista de álbuns.
-    """
-    queryset = Album.objects.all().order_by('-criado_em')
+    queryset = Album.objects.filter(is_publico=True).order_by('-data_evento')
     serializer_class = AlbumSerializer
-    permission_classes = [AllowAny] # Permite acesso não autenticado
-
-class AlbumDetailView(generics.RetrieveAPIView):
-    """
-    View para ver os detalhes de um único álbum, incluindo todas as suas fotos.
-    """
-    queryset = Album.objects.all()
-    serializer_class = AlbumDetailSerializer
     permission_classes = [AllowAny]
 
-class AlbumViewSet(viewsets.ModelViewSet):
-    """
-    API endpoint que permite aos fotógrafos criar, ver, editar e deletar
-    seus próprios álbuns.
-    """
-    serializer_class = AlbumDashboardSerializer
-    # Garante que apenas fotógrafos autenticados acessem
-    permission_classes = [IsAuthenticated, IsFotografo]
+class AlbumDetailView(generics.RetrieveAPIView):
+    queryset = Album.objects.filter(is_publico=True)
+    serializer_class = AlbumDetailSerializer
+    permission_classes = [AllowAny]
+    lookup_field = 'id'
 
-    def get_queryset(self):
-        """
-        ESSENCIAL: Esta função sobrescreve o comportamento padrão para garantir
-        que a ViewSet retorne apenas os álbuns pertencentes ao fotógrafo logado.
-        """
-        return Album.objects.filter(fotografo=self.request.user).order_by('-data_evento')
-
-    def perform_create(self, serializer):
-        """
-        ESSENCIAL: Esta função é chamada ao criar um novo álbum (POST).
-        Ela associa automaticamente o novo álbum ao fotógrafo logado.
-        """
-        serializer.save(fotografo=self.request.user)
+    def get(self, request, *args, **kwargs):
+        response = super().get(request, *args, **kwargs)
+        response['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response['Pragma'] = 'no-cache'
+        response['Expires'] = '0'
+        return response
 
 class BuscaFacialView(APIView):
     permission_classes = [AllowAny]
-    parser_classes = [MultiPartParser, FormParser]
 
-    def post(self, request, format=None):
-        if 'imagem_referencia' not in request.FILES:
-            return Response({"error": "Nenhum arquivo de imagem fornecido."}, status=status.HTTP_400_BAD_REQUEST)
-
-        imagem_referencia = request.FILES['imagem_referencia'].read()
+    def post(self, request):
+        imagem_referencia = request.FILES.get('imagem_referencia')
+        if not imagem_referencia:
+            return Response({"error": "Nenhuma imagem de referência enviada."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
-
             response = rekognition_client.search_faces_by_image(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
-                Image={'Bytes': imagem_referencia},
-                FaceMatchThreshold=95, # Limiar de confiança (ajuste conforme necessário)
-                MaxFaces=5
+                Image={'Bytes': imagem_referencia.read()},
+                MaxFaces=5,
+                FaceMatchThreshold=95
             )
+            
+            face_matches = response.get('FaceMatches', [])
+            if not face_matches:
+                return Response([], status=status.HTTP_200_OK)
 
-            face_ids_encontrados = [match['Face']['FaceId'] for match in response.get('FaceMatches', [])]
-            if not face_ids_encontrados:
-                return Response([], status=status.HTTP_200_OK) # Retorna lista vazia se não encontrar
-
-            # Busca no nosso banco de dados quais fotos contêm essas faces
-            faces_no_db = FaceIndexada.objects.filter(rekognition_face_id__in=face_ids_encontrados)
-
-            # Obtém os IDs das fotos, sem duplicatas
-            foto_ids = faces_no_db.values_list('foto_id', flat=True).distinct()
-
-            fotos_encontradas = Foto.objects.filter(id__in=foto_ids)
-
-            # Serializa os resultados para enviar ao cliente
-            # Reutilizamos o FotoSerializer que já exibe a miniatura com marca d'água
-            serializer = FotoSerializer(fotos_encontradas, many=True, context={'request': request})
+            matched_face_ids = [match['Face']['FaceId'] for match in face_matches]
+            
+            fotos_encontradas_ids = FaceIndexada.objects.filter(
+                rekognition_face_id__in=matched_face_ids
+            ).values_list('foto_id', flat=True).distinct()
+            
+            fotos = Foto.objects.filter(id__in=fotos_encontradas_ids)
+            serializer = FotoSerializer(fotos, many=True, context={'request': request})
             return Response(serializer.data)
 
         except Exception as e:
-            print(f"ERRO NA BUSCA FACIAL: {e}")
-            return Response({"error": "Ocorreu um erro ao processar a busca facial."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            print(f"Erro na busca facial: {e}")
+            return Response({"error": "Ocorreu um erro durante a busca facial."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+# --- VIEWS DO PAINEL DO FOTÓGRAFO (DASHBOARD) ---
+
+class FotoUploadView(generics.CreateAPIView):
+    queryset = Foto.objects.all()
+    serializer_class = FotoUploadSerializer
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+
+class VideoUploadDashboardView(generics.CreateAPIView):
+    queryset = Video.objects.all()
+    serializer_class = VideoUploadSerializer
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+
+class AlbumViewSet(viewsets.ModelViewSet):
+    serializer_class = AlbumDashboardSerializer
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+
+    def get_queryset(self):
+        # Admin vê todos os álbuns, Fotógrafo vê apenas os seus
+        if self.request.user.papel == 'ADMIN':
+            return Album.objects.all()
+        return Album.objects.filter(fotografo=self.request.user)
+
+    def perform_create(self, serializer):
+        # --- LÓGICA DE CRIAÇÃO CORRIGIDA ---
+        # Se for um fotógrafo a criar, associa-o automaticamente
+        if self.request.user.papel == Usuario.Papel.FOTOGRAFO:
+            serializer.save(fotografo=self.request.user)
+        
+        # Se for um Admin, ele DEVE enviar o 'fotografo_id' no pedido.
+        # Se ele não enviar, o 'fotografo' vem no serializer.save()
+        # e o modelo irá levantar um erro de 'NOT NULL', o que é correto.
+        # O frontend do Admin (se for construir) deve permitir selecionar um fotógrafo.
+        elif self.request.user.papel == Usuario.Papel.ADMIN:
+            # A lógica de associar ao 'fotografo' enviado já é tratada pelo serializer.
+            # Se o 'fotografo' não for enviado, o serializer.save() irá falhar
+            # (o que é o comportamento de segurança esperado).
+            serializer.save()
+
+class FotoViewSet(viewsets.ModelViewSet):
+    serializer_class = FotoDashboardSerializer
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+
+    def get_queryset(self):
+        if self.request.user.papel == 'ADMIN':
+            return Foto.objects.all()
+        return Foto.objects.filter(album__fotografo=self.request.user)
+
+class VideoViewSet(viewsets.ModelViewSet):
+    serializer_class = VideoDashboardSerializer
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+
+    def get_queryset(self):
+        if self.request.user.papel == 'ADMIN':
+            return Video.objects.all()
+        return Video.objects.filter(album__fotografo=self.request.user)

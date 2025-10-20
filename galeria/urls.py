@@ -1,34 +1,32 @@
+# galeria/urls.py
+
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import BuscaFacialView
 from .views import (
-    FotoUploadView, AlbumListView, AlbumDetailView, 
-    AlbumViewSet, FotoViewSet, VideoUploadView, VideoViewSet
+    AlbumListView, 
+    AlbumDetailView, 
+    BuscaFacialView,
+    FotoUploadView,
+    VideoUploadDashboardView,  # <-- Nome corrigido
+    AlbumViewSet,
+    FotoViewSet,
+    VideoViewSet
 )
 
+# Roteador para os endpoints do painel (Dashboard)
+dashboard_router = DefaultRouter()
+dashboard_router.register(r'albuns', AlbumViewSet, basename='dashboard-album')
+dashboard_router.register(r'fotos', FotoViewSet, basename='dashboard-foto')
+dashboard_router.register(r'videos', VideoViewSet, basename='dashboard-video')
+
 urlpatterns = [
-    # URL de upload para fotógrafos
-    path('fotos/upload/', FotoUploadView.as_view(), name='foto_upload'),
-    # URL para listar todos os álbuns
+    # URLs Públicas (para clientes)
     path('albuns/', AlbumListView.as_view(), name='album-list'),
-
-    # URL para ver um álbum específico. <int:pk> captura o ID do álbum.
-    path('albuns/<int:pk>/', AlbumDetailView.as_view(), name='album-detail'),
-]
-
-# Cria um roteador
-router = DefaultRouter()
-# Registra nossa ViewSet. O router irá criar as URLs para nós.
-# O prefixo será 'dashboard/albuns'
-router.register(r'dashboard/albuns', AlbumViewSet, basename='dashboard-album')
-# Registra a nova ViewSet de Fotos
-router.register(r'dashboard/fotos', FotoViewSet, basename='dashboard-foto')
-router.register(r'dashboard/videos', VideoViewSet, basename='dashboard-video')
-
-# As URLs de upload são manuais pois não fazem parte de um ViewSet padrão.
-urlpatterns += [
-    path('dashboard/videos/upload/', VideoUploadView.as_view(), name='video-upload'),
+    path('albuns/<int:id>/', AlbumDetailView.as_view(), name='album-detail'),
     path('fotos/busca-facial/', BuscaFacialView.as_view(), name='busca-facial'),
+    
+    # URLs do Painel (para fotógrafos/admins)
+    path('fotos/upload/', FotoUploadView.as_view(), name='foto-upload'),
+    path('dashboard/videos/upload/', VideoUploadDashboardView.as_view(), name='video-upload'), # <-- Nome corrigido
+    path('dashboard/', include(dashboard_router.urls)),
 ]
-# Adiciona as URLs geradas pelo roteador às nossas URLs existentes
-urlpatterns += router.urls

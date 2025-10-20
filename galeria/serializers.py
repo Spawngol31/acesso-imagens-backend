@@ -1,29 +1,46 @@
 # galeria/serializers.py
 
-import boto3
-from botocore.exceptions import ClientError
+# Não precisamos mais do boto3 aqui para os serializers públicos
 from django.conf import settings
 from rest_framework import serializers
 from .models import Foto, Album, Video
 from contas.models import Usuario
 
-# --- SERIALIZERS DE EXIBIÇÃO PARA CLIENTES ---
-
+# --- SERIALIZER DE FOTO (COM A LÓGICA CORRETA) ---
 class FotoSerializer(serializers.ModelSerializer):
-    # O DRF agora irá gerar a URL pública automaticamente a partir do campo
-    imagem_url = serializers.URLField(source='miniatura_marca_dagua.url', read_only=True)
+    imagem_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Foto
         fields = ['id', 'legenda', 'preco', 'imagem_url', 'rotacao']
 
+    def get_imagem_url(self, obj):
+        # Lógica defensiva:
+        # 1. Verifica se a miniatura (que é pública) existe
+        if obj.miniatura_marca_dagua and obj.miniatura_marca_dagua.name:
+            # 2. Se sim, retorna a sua URL pública direta. É rápido.
+            return obj.miniatura_marca_dagua.url
+        
+        # 3. Se a miniatura ainda não foi processada (Celery a correr),
+        #    retornamos None para não "crashar" a API. O frontend
+        #    deve ser capaz de lidar com uma URL nula (ex: mostrar um placeholder).
+        return None
+
+# --- SERIALIZER DE VÍDEO (CORRETO) ---
 class VideoSerializer(serializers.ModelSerializer):
-    miniatura_url = serializers.URLField(source='miniatura.url', read_only=True)
+    # A miniatura do vídeo também é pública
+    miniatura_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Video
         fields = ['id', 'titulo', 'preco', 'miniatura_url']
 
+    def get_miniatura_url(self, obj):
+        if obj.miniatura and obj.miniatura.name:
+            return obj.miniatura.url
+        return None
+
+# --- SERIALIZER DE ÁLBUM (COM A LÓGICA CORRETA) ---
 class AlbumSerializer(serializers.ModelSerializer):
     fotografo = serializers.StringRelatedField()
     fotos_count = serializers.IntegerField(source='fotos.count', read_only=True)
@@ -33,36 +50,13 @@ class AlbumSerializer(serializers.ModelSerializer):
         model = Album
         fields = ['id', 'titulo', 'descricao', 'data_evento', 'fotografo', 'fotos_count', 'slug', 'capa_url']
 
-    # --- SUBSTITUA ESTA FUNÇÃO ---
     def get_capa_url(self, obj):
-        # 1. Primeiro, verifica se o campo 'capa' e o nome do ficheiro existem.
-        if not obj.capa or not obj.capa.name:
-            return None # Retorna nulo se não houver capa, em vez de crashar.
-        
-        # 2. O resto da lógica para gerar a URL assinada continua a mesma.
-        key = obj.capa.name.lstrip('/')
-        
-        location_prefix = getattr(settings, 'AWS_LOCATION', '')
-        if location_prefix and not key.startswith(f"{location_prefix}/"):
-            key = f"{location_prefix}/{key}"
-        
-        try:
-            s3_client = boto3.client(
-                's3',
-                aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
-                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-                region_name=settings.AWS_S3_REGION_NAME,
-                config=boto3.session.Config(signature_version='s3v4')
-            )
-            url = s3_client.generate_presigned_url(
-                'get_object',
-                Params={'Bucket': settings.AWS_STORAGE_BUCKET_NAME, 'Key': key},
-                ExpiresIn=3600
-            )
-            return url
-        except ClientError:
-            return None
+        # A capa do álbum também é pública
+        if obj.capa and obj.capa.name:
+            return obj.capa.url
+        return None # Retorna nulo se não houver capa, em vez de crashar
 
+# --- SERIALIZER DE DETALHES DO ÁLBUM (CORRETO) ---
 class AlbumDetailSerializer(AlbumSerializer):
     fotos = FotoSerializer(many=True, read_only=True)
     videos = VideoSerializer(many=True, read_only=True)
@@ -70,9 +64,8 @@ class AlbumDetailSerializer(AlbumSerializer):
     class Meta(AlbumSerializer.Meta):
         fields = AlbumSerializer.Meta.fields + ['fotos', 'videos']
 
-
-# --- SERIALIZERS PARA UPLOAD E DASHBOARD ---
-
+# --- SERIALIZERS PARA UPLOAD E DASHBOARD (CORRETOS) ---
+# (Estes são usados pelo seu painel, não pelo público)
 class FotoUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Foto
