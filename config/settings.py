@@ -131,7 +131,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = 'pt-BR'
-TIME_ZONE = 'UTC'
+TIME_ZONE = 'UTC-3'
 USE_I18N = True
 USE_TZ = True
 
@@ -166,7 +166,7 @@ AWS_REKOGNITION_REGION_NAME = os.getenv('AWS_REKOGNITION_REGION_NAME')
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY')
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'nao-responda@acessoimagens.com.br')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'contato@acessoimagens.com.br')
 if DEBUG:
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 else:
