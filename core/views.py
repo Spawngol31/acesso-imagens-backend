@@ -57,7 +57,7 @@ class WatermarkToolView(APIView):
             original_image.thumbnail((1920, 1920), Image.Resampling.LANCZOS)
             img_width, img_height = original_image.size
 
-            watermark_path = os.path.join(settings.BASE_DIR, 'assets', 'watermark.png')
+            watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.png')
             watermark = Image.open(watermark_path).convert("RGBA")
             
             new_wm_width = int(img_width * 0.20)
