@@ -68,7 +68,7 @@ def processar_foto_task(foto_id):
             original_image.thumbnail(size)
             img_width, img_height = original_image.size
 
-            watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.png')
+            watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
             watermark = Image.open(watermark_path).convert("RGBA")
             
             PROPORCAO_MARCA = 0.20
