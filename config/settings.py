@@ -159,9 +159,16 @@ STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET')
 
 # --- CONFIGURAÇÕES DE E-MAIL ---
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'contato@acessoimagens.com.br')
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'nao-responda@acessoimagens.com.br')
+
 if DEBUG:
+    # Em desenvolvimento (local), imprime os e-mails no console
     EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
 else:
-    # Em produção, você mudará isto para SendGrid ou similar
-    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+    # Em produção (online no Render), usa o SendGrid (SMTP)
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+    EMAIL_HOST = 'smtp.sendgrid.net'
+    EMAIL_PORT = 587
+    EMAIL_USE_TLS = True
+    EMAIL_HOST_USER = 'apikey' # Este é o username literal que o SendGrid exige
+    EMAIL_HOST_PASSWORD = os.getenv('SENDGRID_API_KEY')
