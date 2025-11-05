@@ -120,6 +120,14 @@ REST_FRAMEWORK = {
 }
 
 # Configuração de CORS (Segurança entre domínios)
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'authorization',
+    'content-type',
+    'origin',
+    'x-csrftoken',
+    'x-requested-with',
+]
 CORS_ALLOWED_ORIGINS_STRING = os.getenv('CORS_ALLOWED_ORIGINS', '')
 CORS_ALLOWED_ORIGINS = []
 if CORS_ALLOWED_ORIGINS_STRING:
