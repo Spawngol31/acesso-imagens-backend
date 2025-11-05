@@ -1,5 +1,6 @@
 # contas/views.py
 
+import os
 from django.core.mail import send_mail
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -83,16 +84,24 @@ class UserAdminViewSet(viewsets.ModelViewSet):
 # --- Views de Recuperação de Senha ---
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
-    authentication_classes = []
     
     def post(self, request):
         email = request.data.get('email')
+        
+        # --- LÓGICA DE URL DINÂMICA ---
+        # Lê a URL do frontend a partir das variáveis de ambiente
+        frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+        # ----------------------------
+
         try:
             user = Usuario.objects.get(email=email)
             token_generator = PasswordResetTokenGenerator()
             token = token_generator.make_token(user)
             uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
-            reset_link = f"http://localhost:5173/resetar-senha/{uidb64}/{token}"
+            
+            # --- CORREÇÃO AQUI ---
+            # Usa a nossa variável dinâmica
+            reset_link = f"{frontend_url}/resetar-senha/{uidb64}/{token}"
 
             send_mail(
                 'Recuperação de Senha - Acesso Imagens',
