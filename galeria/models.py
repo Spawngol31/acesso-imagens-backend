@@ -34,7 +34,8 @@ class Album(models.Model):
     is_publico = models.BooleanField(default=True, help_text="Se marcado, o álbum será visível para todos os visitantes.")
     slug = models.SlugField(unique=True, max_length=255, blank=True, help_text="Link personalizado. Deixe em branco para gerar automaticamente.")
     capa = models.ImageField(upload_to='album_capas/', null=True, blank=True, help_text="Imagem de capa do álbum.", storage=PublicMediaStorage())
-    
+    is_arquivado = models.BooleanField(default=False, help_text="Se marcado, o álbum não será visível no site público.")
+
     def save(self, *args, **kwargs):
         # --- LÓGICA DE SLUG ROBUSTA (À PROVA DE ERROS) ---
         if not self.slug:
@@ -66,7 +67,8 @@ class Foto(models.Model):
     preco = models.DecimalField(max_digits=10, decimal_places=2, default=10.00)
     rotacao = models.IntegerField(default=0)
     miniatura_marca_dagua = models.ImageField(upload_to='miniaturas/', blank=True, null=True, storage=PublicMediaStorage())
-    
+    is_arquivado = models.BooleanField(default=False, help_text="Se marcado, a foto não será visível no site público.")
+
     # Os campos duplicados 'legenda' e 'data_upload' foram removidos
     
     def __str__(self):

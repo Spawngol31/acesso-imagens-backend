@@ -1,6 +1,7 @@
 # galeria/serializers.py
 
-# Não precisamos mais do boto3 aqui para os serializers públicos
+import boto3
+from botocore.exceptions import ClientError
 from django.conf import settings
 from rest_framework import serializers
 from .models import Foto, Album, Video
@@ -12,7 +13,7 @@ class FotoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Foto
-        fields = ['id', 'legenda', 'preco', 'imagem_url', 'rotacao']
+        fields = ['id', 'legenda', 'preco', 'imagem_url', 'rotacao', 'is_arquivado'] # Adicionámos 'is_arquivado'
 
     def get_imagem_url(self, obj):
         # Lógica defensiva:
@@ -48,7 +49,7 @@ class AlbumSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Album
-        fields = ['id', 'titulo', 'descricao', 'data_evento', 'fotografo', 'fotos_count', 'slug', 'capa_url']
+        fields = ['id', 'titulo', 'descricao', 'data_evento', 'fotografo', 'fotos_count', 'slug', 'capa_url', 'is_arquivado'] # Adicionámos 'is_arquivado'
 
     def get_capa_url(self, obj):
         # A capa do álbum também é pública
@@ -58,11 +59,31 @@ class AlbumSerializer(serializers.ModelSerializer):
 
 # --- SERIALIZER DE DETALHES DO ÁLBUM (CORRETO) ---
 class AlbumDetailSerializer(AlbumSerializer):
-    fotos = FotoSerializer(many=True, read_only=True)
-    videos = VideoSerializer(many=True, read_only=True)
+    fotos = serializers.SerializerMethodField()
+    videos = VideoSerializer(many=True, read_only=True) # Assumindo que vídeos não são arquivados
     
     class Meta(AlbumSerializer.Meta):
         fields = AlbumSerializer.Meta.fields + ['fotos', 'videos']
+
+    def get_fotos(self, obj):
+        # 1. Pega o 'request' do contexto do serializer
+        request = self.context.get('request')
+        
+        # 2. Define o queryset base (todas as fotos do álbum)
+        queryset = obj.fotos.all().order_by('id')
+        
+        # 3. Verifica se o utilizador está logado e é o dono do álbum (ou admin)
+        is_owner_or_admin = False
+        if request and hasattr(request, 'user') and request.user.is_authenticated:
+            if request.user == obj.fotografo or request.user.papel == Usuario.Papel.ADMIN:
+                is_owner_or_admin = True
+
+        # 4. Se NÃO for o dono, filtra as fotos arquivadas
+        if not is_owner_or_admin:
+            queryset = queryset.filter(is_arquivado=False)
+        
+        # 5. Retorna os dados
+        return FotoSerializer(queryset, many=True, context=self.context).data
 
 # --- SERIALIZERS PARA UPLOAD E DASHBOARD (CORRETOS) ---
 # (Estes são usados pelo seu painel, não pelo público)
@@ -82,7 +103,7 @@ class AlbumDashboardSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'titulo', 'descricao', 'data_evento', 'categoria', 
             'local', 'is_publico', 'slug', 'fotografo',
-            'capa'
+            'capa', 'is_arquivado'
         ]
         read_only_fields = ['slug', 'fotografo']
 
@@ -92,7 +113,7 @@ class FotoDashboardSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'album', 'legenda', 'preco', 
             'imagem', 'miniatura_marca_dagua',
-            'rotacao'
+            'rotacao', 'is_arquivado'
         ]
         read_only_fields = ['id', 'album', 'imagem', 'miniatura_marca_dagua']
 

@@ -6,6 +6,8 @@ from rest_framework import generics, viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.decorators import action
+from decimal import Decimal, InvalidOperation
 
 # Importa os modelos
 from .models import Album, Foto, Video, FaceIndexada
@@ -31,12 +33,12 @@ from contas.models import Usuario
 # --- VIEWS PÚBLICAS (PARA OS CLIENTES) ---
 
 class AlbumListView(generics.ListAPIView):
-    queryset = Album.objects.filter(is_publico=True).order_by('-data_evento')
+    queryset = Album.objects.filter(is_publico=True, is_arquivado=False).order_by('-data_evento')
     serializer_class = AlbumSerializer
     permission_classes = [AllowAny]
 
 class AlbumDetailView(generics.RetrieveAPIView):
-    queryset = Album.objects.filter(is_publico=True)
+    queryset = Album.objects.filter(is_publico=True, is_arquivado=False)
     serializer_class = AlbumDetailSerializer
     permission_classes = [AllowAny]
     lookup_field = 'id'
@@ -75,7 +77,12 @@ class BuscaFacialView(APIView):
                 rekognition_face_id__in=matched_face_ids
             ).values_list('foto_id', flat=True).distinct()
             
-            fotos = Foto.objects.filter(id__in=fotos_encontradas_ids)
+            fotos = Foto.objects.filter(
+                id__in=fotos_encontradas_ids,
+                is_arquivado=False,
+                album__is_arquivado=False,
+                album__is_publico=True
+            )
             serializer = FotoSerializer(fotos, many=True, context={'request': request})
             return Response(serializer.data)
 
@@ -122,6 +129,58 @@ class AlbumViewSet(viewsets.ModelViewSet):
             # (o que é o comportamento de segurança esperado).
             serializer.save()
 
+    @action(detail=True, methods=['post'])
+    def arquivar(self, request, pk=None):
+        album = self.get_object()
+        album.is_arquivado = True
+        album.save()
+        return Response({'status': 'álbum arquivado'})
+
+    @action(detail=True, methods=['post'])
+    def desarquivar(self, request, pk=None):
+        album = self.get_object()
+        album.is_arquivado = False
+        album.save()
+        return Response({'status': 'álbum desarquivado'})
+
+    @action(detail=True, methods=['post'])
+    def bulk_update_photos(self, request, pk=None):
+        album = self.get_object()
+        new_price_str = request.data.get('preco')
+
+        if new_price_str is None:
+            return Response({'error': 'Preço não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            new_price = Decimal(new_price_str)
+            if new_price < 0:
+                raise InvalidOperation
+        except InvalidOperation:
+             return Response({'error': 'Preço inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Esta é a "magia": atualiza todas as fotos do álbum de uma vez
+        count = album.fotos.all().update(preco=new_price)
+        return Response({'status': f'{count} fotos atualizadas com sucesso para R$ {new_price:.2f}'})
+
+    @action(detail=True, methods=['post'])
+    def bulk_update_videos(self, request, pk=None):
+        album = self.get_object()
+        new_price_str = request.data.get('preco')
+        
+        if new_price_str is None:
+            return Response({'error': 'Preço não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            new_price = Decimal(new_price_str)
+            if new_price < 0:
+                raise InvalidOperation
+        except InvalidOperation:
+             return Response({'error': 'Preço inválido.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Atualiza todos os vídeos do álbum de uma vez
+        count = album.videos.all().update(preco=new_price)
+        return Response({'status': f'{count} vídeos atualizados com sucesso para R$ {new_price:.2f}'})
+
 class FotoViewSet(viewsets.ModelViewSet):
     serializer_class = FotoDashboardSerializer
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
@@ -130,6 +189,20 @@ class FotoViewSet(viewsets.ModelViewSet):
         if self.request.user.papel == 'ADMIN':
             return Foto.objects.all()
         return Foto.objects.filter(album__fotografo=self.request.user)
+    
+    @action(detail=True, methods=['post'])
+    def arquivar(self, request, pk=None):
+        foto = self.get_object()
+        foto.is_arquivado = True
+        foto.save()
+        return Response({'status': 'foto arquivada'})
+
+    @action(detail=True, methods=['post'])
+    def desarquivar(self, request, pk=None):
+        foto = self.get_object()
+        foto.is_arquivado = False
+        foto.save()
+        return Response({'status': 'foto desarquivada'})
 
 class VideoViewSet(viewsets.ModelViewSet):
     serializer_class = VideoDashboardSerializer

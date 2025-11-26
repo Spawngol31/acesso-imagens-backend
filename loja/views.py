@@ -1,7 +1,7 @@
 # loja/views.py
 
 import os
-import stripe
+import mercadopago
 import boto3
 from botocore.exceptions import ClientError
 from decimal import Decimal
@@ -9,6 +9,7 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import Sum, Count
+from django.http import JsonResponse
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -82,79 +83,146 @@ class AplicarCupomView(APIView):
         serializer = CarrinhoSerializer(carrinho, context={'request': request})
         return Response(serializer.data)
 
-class CheckoutView(APIView):
+class MercadoPagoCheckoutView(APIView):
     permission_classes = [IsAuthenticated, IsCliente]
     
     def post(self, request):
-        carrinho = Carrinho.objects.get(cliente=request.user)
-        if not carrinho.itens.exists():
-            return Response({"error": "Seu carrinho está vazio."}, status=status.HTTP_400_BAD_REQUEST)
-        
-        serializer_carrinho = CarrinhoSerializer(carrinho, context={'request': request})
-        total = int(serializer_carrinho.data.get('total') * 100) # Usa o total serializado
-
-        if total <= 0:
-             return Response({"error": "O valor total do pedido deve ser positivo."}, status=status.HTTP_400_BAD_REQUEST)
-
-        pedido = Pedido.objects.create(
-            cliente=request.user,
-            valor_total=Decimal(total / 100)
-        )
-        for item_carrinho in carrinho.itens.all():
-            ItemPedido.objects.create(
-                pedido=pedido,
-                foto=item_carrinho.foto,
-                preco=item_carrinho.foto.preco
-            )
-        
-        stripe.api_key = settings.STRIPE_SECRET_KEY
         try:
-            payment_intent = stripe.PaymentIntent.create(
-                amount=total,
-                currency='brl',
-                metadata={'pedido_id': pedido.id}
-            )
-            return Response({
-                'clientSecret': payment_intent.client_secret,
-                'pedidoId': pedido.id
-            })
-        except Exception as e:
-            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            carrinho = Carrinho.objects.get(cliente=request.user)
+            if not carrinho.itens.exists():
+                return Response({"error": "Seu carrinho está vazio."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            serializer_carrinho = CarrinhoSerializer(carrinho, context={'request': request})
+            total = float(serializer_carrinho.data.get('total'))
 
-class StripeWebhookView(APIView):
+            if total <= 0:
+                return Response({"error": "O valor total do pedido deve ser positivo."}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 1. Cria o Pedido
+            pedido = Pedido.objects.create(
+                cliente=request.user,
+                valor_total=Decimal(total)
+            )
+            itens_do_pedido = []
+            for item_carrinho in carrinho.itens.all():
+                ItemPedido.objects.create(
+                    pedido=pedido,
+                    foto=item_carrinho.foto,
+                    preco=item_carrinho.foto.preco
+                )
+                itens_do_pedido.append({
+                    "title": f"Foto ID: {item_carrinho.foto.id}",
+                    "quantity": 1,
+                    "unit_price": float(item_carrinho.foto.preco),
+                    "currency_id": "BRL"
+                })
+            
+            if not hasattr(settings, 'MP_ACCESS_TOKEN') or not settings.MP_ACCESS_TOKEN:
+                raise Exception("A chave MP_ACCESS_TOKEN não está configurada.")
+
+            sdk = mercadopago.SDK(settings.MP_ACCESS_TOKEN)
+
+            preference_data = {
+                "items": itens_do_pedido,
+                "payer": {
+                    "name": request.user.nome_completo,
+                    "email": request.user.email,
+                },
+                "back_urls": {
+                    "success": f"{settings.FRONTEND_URL}/minhas-compras",
+                    "failure": f"{settings.FRONTEND_URL}/carrinho",
+                    "pending": f"{settings.FRONTEND_URL}/minhas-compras"
+                },
+                # Força o Mercado Pago a não excluir nenhum método
+                "payment_methods": {
+                    "excluded_payment_types": [], # Aceita tudo (Ticket, ATM, Credit Card, etc.)
+                    "excluded_payment_methods": [], # Aceita tudo (Pix, Visa, Master, etc.)
+                    "installments": 12 # Define parcelas máximas (opcional)
+                },
+                # "auto_return": "approved",
+                "external_reference": str(pedido.id),
+                "notification_url": f"{settings.BACKEND_URL}/api/webhooks/mp/",
+            }
+
+            # --- ALTERAÇÃO DE DIAGNÓSTICO ---
+            print(f"--- ENVIANDO PARA MERCADO PAGO ---\nDados: {preference_data}")
+            
+            preference_response = sdk.preference().create(preference_data)
+            
+            print(f"--- RESPOSTA DO MERCADO PAGO ---\nStatus: {preference_response.get('status')}\nResposta: {preference_response.get('response')}")
+
+            # Verifica se o pedido foi criado com sucesso (Status 201 ou 200)
+            if preference_response.get("status") not in [200, 201]:
+                # Se falhou, levanta um erro com a mensagem do Mercado Pago
+                error_detail = preference_response.get("response", {})
+                raise Exception(f"Mercado Pago recusou: {error_detail}")
+
+            preference = preference_response["response"]
+
+            print(f"--- DIAGNÓSTICO MERCADO PAGO ---")
+            print(f"Link de Teste (Sandbox): {preference.get('sandbox_init_point')}")
+            print(f"Métodos Excluídos: {preference.get('payment_methods')}")
+            
+            return Response({
+                'preference_id': preference['id']
+            })
+
+        except Exception as e:
+            # Imprime o erro completo no terminal
+            print(f"ERRO CRÍTICO NO CHECKOUT: {str(e)}")
+            return Response({'error': f"Erro no servidor: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class MercadoPagoWebhookView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
-        payload = request.body
-        sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-        endpoint_secret = settings.STRIPE_WEBHOOK_SECRET
+        sdk = mercadopago.SDK(settings.MP_ACCESS_TOKEN)
+        
+        signature_header = request.headers.get('X-Signature')
+        if not signature_header or not settings.MP_WEBHOOK_SECRET:
+            print("Webhook: Assinatura ou Chave Secreta ausente.")
+            return Response({"error": "Configuração de segurança ausente"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- MELHORIA DE SEGURANÇA ---
-        if not endpoint_secret:
-            print("!!! ERRO DE SEGURANÇA: STRIPE_WEBHOOK_SECRET não está definido !!!")
-            return Response(status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-        event = None
         try:
-            event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
-        except (ValueError, stripe.error.SignatureVerificationError) as e:
-            return Response(status=status.HTTP_400_BAD_REQUEST)
+            # --- CORREÇÃO AQUI ---
+            # O SDK irá levantar um 'Exception' genérico se a validação falhar
+            sdk.webhook().validate_signature(
+                request.body.decode('utf-8'), 
+                signature_header, 
+                settings.MP_WEBHOOK_SECRET
+            )
+        except Exception as e: # Mudámos de 'WebhookException' para 'Exception'
+            print(f"Webhook: Assinatura inválida ou erro de validação: {str(e)}")
+            return Response({"error": "Assinatura inválida"}, status=status.HTTP_400_BAD_REQUEST)
+        # --- FIM DA CORREÇÃO ---
 
-        if event['type'] == 'payment_intent.succeeded':
-            payment_intent = event['data']['object']
-            pedido_id = payment_intent['metadata']['pedido_id']
+        topic = request.data.get("type")
+        payment_id = request.data.get("data", {}).get("id")
+
+        if topic == "payment":
             try:
-                pedido = Pedido.objects.get(id=pedido_id)
-                if pedido.status == Pedido.StatusPedido.PAGO:
-                    return Response(status=status.HTTP_200_OK)
-                pedido.status = Pedido.StatusPedido.PAGO
-                pedido.save()
-                for item_pedido in pedido.itens.all():
-                    FotoComprada.objects.create(cliente=pedido.cliente, foto=item_pedido.foto)
-                # Limpa o carrinho do cliente após a compra
-                ItemCarrinho.objects.filter(carrinho__cliente=pedido.cliente).delete()
-            except Pedido.DoesNotExist:
-                return Response({"error": "Pedido não encontrado"}, status=status.HTTP_404_NOT_FOUND)
+                payment_response = sdk.payment().get(payment_id)
+                payment = payment_response["response"]
+
+                if payment["status"] == "approved":
+                    pedido_id = payment.get("external_reference")
+                    try:
+                        pedido = Pedido.objects.get(id=int(pedido_id))
+                        if pedido.status == Pedido.StatusPedido.PAGO:
+                            return Response(status=status.HTTP_200_OK)
+                        
+                        pedido.status = Pedido.StatusPedido.PAGO
+                        pedido.save()
+                        
+                        for item_pedido in pedido.itens.all():
+                            FotoComprada.objects.create(cliente=pedido.cliente, foto=item_pedido.foto)
+                        
+                        ItemCarrinho.objects.filter(carrinho__cliente=pedido.cliente).delete()
+                        
+                    except Pedido.DoesNotExist:
+                        return Response({"error": "Pedido não encontrado"}, status=status.HTTP_404_NOT_FOUND)
+            except Exception as e:
+                return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response(status=status.HTTP_200_OK)
 
