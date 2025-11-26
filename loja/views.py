@@ -139,7 +139,7 @@ class MercadoPagoCheckoutView(APIView):
                     "excluded_payment_methods": [], # Aceita tudo (Pix, Visa, Master, etc.)
                     "installments": 12 # Define parcelas máximas (opcional)
                 },
-                # "auto_return": "approved",
+                "auto_return": "approved",
                 "external_reference": str(pedido.id),
                 "notification_url": f"{settings.BACKEND_URL}/api/webhooks/mp/",
             }
