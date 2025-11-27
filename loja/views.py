@@ -129,44 +129,28 @@ class MercadoPagoCheckoutView(APIView):
                     "failure": f"{settings.FRONTEND_URL}/carrinho",
                     "pending": f"{settings.FRONTEND_URL}/minhas-compras"
                 },
-                # Força o Mercado Pago a não excluir nenhum método
-                "payment_methods": {
-                    "excluded_payment_types": [], # Aceita tudo (Ticket, ATM, Credit Card, etc.)
-                    "excluded_payment_methods": [], # Aceita tudo (Pix, Visa, Master, etc.)
-                    "installments": 12 # Define parcelas máximas (opcional)
-                },
-                #"auto_return": "approved",
+                # "auto_return": "approved", # Desativado para evitar erros em localhost
                 "external_reference": str(pedido.id),
                 "notification_url": f"{settings.BACKEND_URL}/api/webhooks/mp/",
             }
-
-            # --- ALTERAÇÃO DE DIAGNÓSTICO ---
-            print(f"--- ENVIANDO PARA MERCADO PAGO ---\nDados: {preference_data}")
             
             preference_response = sdk.preference().create(preference_data)
             
-            print(f"--- RESPOSTA DO MERCADO PAGO ---\nStatus: {preference_response.get('status')}\nResposta: {preference_response.get('response')}")
-
-            # Verifica se o pedido foi criado com sucesso (Status 201 ou 200)
             if preference_response.get("status") not in [200, 201]:
-                # Se falhou, levanta um erro com a mensagem do Mercado Pago
-                error_detail = preference_response.get("response", {})
-                raise Exception(f"Mercado Pago recusou: {error_detail}")
+                 raise Exception(f"Mercado Pago recusou: {preference_response.get('response')}")
 
             preference = preference_response["response"]
-
-            print(f"--- DIAGNÓSTICO MERCADO PAGO ---")
-            print(f"Link de Teste (Sandbox): {preference.get('sandbox_init_point')}")
-            print(f"Métodos Excluídos: {preference.get('payment_methods')}")
             
+            # --- CORREÇÃO AQUI: Devolvemos também o order_id ---
             return Response({
-                'preference_id': preference['id']
+                'preference_id': preference['id'],
+                'order_id': str(pedido.id) # IMPORTANTE!
             })
 
         except Exception as e:
-            # Imprime o erro completo no terminal
             print(f"ERRO CRÍTICO NO CHECKOUT: {str(e)}")
             return Response({'error': f"Erro no servidor: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class MercadoPagoProcessPaymentView(APIView):
     permission_classes = [IsAuthenticated, IsCliente]
@@ -176,12 +160,18 @@ class MercadoPagoProcessPaymentView(APIView):
             payment_data = request.data
             sdk = mercadopago.SDK(settings.MP_ACCESS_TOKEN)
             
-            # Adiciona o e-mail do pagador se não vier do frontend
+            # Garante que o email está presente
             if 'payer' not in payment_data:
                 payment_data['payer'] = {}
-                payment_data['payer']['email'] = request.user.email
+            payment_data['payer']['email'] = request.user.email
 
-            # Cria o pagamento no Mercado Pago
+            # --- CORREÇÃO AQUI: Força o external_reference ---
+            # Se o frontend enviou o external_reference, garantimos que ele vai para o MP
+            if 'external_reference' in payment_data:
+                print(f"--- Processando pagamento para Pedido ID: {payment_data['external_reference']} ---")
+            else:
+                print("--- AVISO: external_reference (ID do Pedido) não recebido do frontend! ---")
+
             payment_response = sdk.payment().create(payment_data)
             payment = payment_response["response"]
             
@@ -196,12 +186,14 @@ class MercadoPagoProcessPaymentView(APIView):
             print(f"ERRO AO PROCESSAR PAGAMENTO: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
+# --- VIEW DO WEBHOOK (Simplificada e Robusta) ---
+@method_decorator(csrf_exempt, name='dispatch')
 class MercadoPagoWebhookView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
         print("\n--- WEBHOOK MERCADO PAGO RECEBIDO ---")
-        
         topic = request.data.get("type")
         payment_id = request.data.get("data", {}).get("id")
         print(f"Tópico: {topic}, Payment ID: {payment_id}")
@@ -220,13 +212,13 @@ class MercadoPagoWebhookView(APIView):
                 if status_pagamento == "approved":
                     if not external_ref:
                         print("ERRO CRÍTICO: Pagamento aprovado sem ID de Pedido (external_reference).")
-                        return Response(status=status.HTTP_200_OK) # Retorna 200 para o MP parar de tentar
+                        return Response(status=status.HTTP_200_OK)
 
                     try:
                         pedido = Pedido.objects.get(id=int(external_ref))
                         
                         if pedido.status == Pedido.StatusPedido.PAGO:
-                            print("Pedido já estava pago.")
+                            print("Pedido já estava pago. Ignorando.")
                             return Response(status=status.HTTP_200_OK)
                         
                         print(f"Processando Pedido {pedido.id}...")
@@ -240,7 +232,7 @@ class MercadoPagoWebhookView(APIView):
                         print(f"SUCESSO: Pedido {pedido.id} finalizado!")
                         
                     except Pedido.DoesNotExist:
-                        print(f"ERRO: Pedido ID {external_ref} não encontrado na base de dados.")
+                        print(f"ERRO: Pedido ID {external_ref} não encontrado.")
                         return Response(status=status.HTTP_404_NOT_FOUND)
             except Exception as e:
                 print(f"ERRO NO WEBHOOK: {e}")
