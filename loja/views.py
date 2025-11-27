@@ -196,48 +196,37 @@ class MercadoPagoProcessPaymentView(APIView):
             print(f"ERRO AO PROCESSAR PAGAMENTO: {str(e)}")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-# --- VIEW DO WEBHOOK (CORRIGIDA COM CSRF_EXEMPT E LOGS) ---
-@method_decorator(csrf_exempt, name='dispatch') # <--- A CORREÇÃO CRÍTICA
 class MercadoPagoWebhookView(APIView):
     permission_classes = [AllowAny]
     
     def post(self, request):
         print("\n--- WEBHOOK MERCADO PAGO RECEBIDO ---")
         
-        # Logs de Depuração (Ver no Render)
         topic = request.data.get("type")
         payment_id = request.data.get("data", {}).get("id")
         print(f"Tópico: {topic}, Payment ID: {payment_id}")
         
-        sdk = mercadopago.SDK(settings.MP_ACCESS_TOKEN)
-        
-        # Validação da Assinatura (Opcional para teste, mas boa prática)
-        signature_header = request.headers.get('X-Signature')
-        if signature_header and settings.MP_WEBHOOK_SECRET:
-            try:
-                # Se falhar, apenas imprimimos o erro, mas continuamos o processamento
-                # para descobrirmos se é apenas erro de chave ou outro problema.
-                sdk.webhook().validate_signature(request.body.decode('utf-8'), signature_header, settings.MP_WEBHOOK_SECRET)
-                print("Assinatura VÁLIDA.")
-            except Exception as e:
-                print(f"AVISO: Assinatura INVÁLIDA: {e}")
-                # return Response({"error": "Assinatura inválida"}, status=status.HTTP_400_BAD_REQUEST) 
-                # (Comentei o return acima para permitir o teste mesmo com chave errada)
-
         if topic == "payment":
             try:
+                sdk = mercadopago.SDK(settings.MP_ACCESS_TOKEN)
                 payment_response = sdk.payment().get(payment_id)
                 payment = payment_response["response"]
+                
                 status_pagamento = payment.get("status")
                 external_ref = payment.get("external_reference")
                 
-                print(f"Status Pagamento: {status_pagamento}, Pedido ID: {external_ref}")
+                print(f"Status: {status_pagamento}, Pedido ID (Ref): {external_ref}")
 
                 if status_pagamento == "approved":
+                    if not external_ref:
+                        print("ERRO CRÍTICO: Pagamento aprovado sem ID de Pedido (external_reference).")
+                        return Response(status=status.HTTP_200_OK) # Retorna 200 para o MP parar de tentar
+
                     try:
                         pedido = Pedido.objects.get(id=int(external_ref))
+                        
                         if pedido.status == Pedido.StatusPedido.PAGO:
-                            print("Pedido já estava pago. Ignorando.")
+                            print("Pedido já estava pago.")
                             return Response(status=status.HTTP_200_OK)
                         
                         print(f"Processando Pedido {pedido.id}...")
@@ -248,13 +237,13 @@ class MercadoPagoWebhookView(APIView):
                             FotoComprada.objects.create(cliente=pedido.cliente, foto=item_pedido.foto)
                         
                         ItemCarrinho.objects.filter(carrinho__cliente=pedido.cliente).delete()
-                        print(f"SUCESSO: Pedido {pedido.id} aprovado e fotos liberadas!")
+                        print(f"SUCESSO: Pedido {pedido.id} finalizado!")
                         
                     except Pedido.DoesNotExist:
-                        print(f"ERRO: Pedido ID {external_ref} não encontrado.")
-                        return Response({"error": "Pedido não encontrado"}, status=status.HTTP_404_NOT_FOUND)
+                        print(f"ERRO: Pedido ID {external_ref} não encontrado na base de dados.")
+                        return Response(status=status.HTTP_404_NOT_FOUND)
             except Exception as e:
-                print(f"ERRO NO PROCESSAMENTO DO PAGAMENTO: {e}")
+                print(f"ERRO NO WEBHOOK: {e}")
                 return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response(status=status.HTTP_200_OK)
