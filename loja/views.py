@@ -139,7 +139,7 @@ class MercadoPagoCheckoutView(APIView):
                     "excluded_payment_methods": [], # Aceita tudo (Pix, Visa, Master, etc.)
                     "installments": 12 # Define parcelas máximas (opcional)
                 },
-                "auto_return": "approved",
+                #"auto_return": "approved",
                 "external_reference": str(pedido.id),
                 "notification_url": f"{settings.BACKEND_URL}/api/webhooks/mp/",
             }
@@ -171,6 +171,34 @@ class MercadoPagoCheckoutView(APIView):
             # Imprime o erro completo no terminal
             print(f"ERRO CRÍTICO NO CHECKOUT: {str(e)}")
             return Response({'error': f"Erro no servidor: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class MercadoPagoProcessPaymentView(APIView):
+    permission_classes = [IsAuthenticated, IsCliente]
+
+    def post(self, request):
+        try:
+            payment_data = request.data
+            sdk = mercadopago.SDK(settings.MP_ACCESS_TOKEN)
+            
+            # Adiciona o e-mail do pagador se não vier do frontend
+            if 'payer' not in payment_data:
+                payment_data['payer'] = {}
+                payment_data['payer']['email'] = request.user.email
+
+            # Cria o pagamento no Mercado Pago
+            payment_response = sdk.payment().create(payment_data)
+            payment = payment_response["response"]
+            
+            status_pagamento = payment.get("status")
+
+            if status_pagamento:
+                return Response(payment, status=status.HTTP_201_CREATED)
+            else:
+                return Response({"error": "Falha ao criar pagamento", "details": payment}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            print(f"ERRO AO PROCESSAR PAGAMENTO: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class MercadoPagoWebhookView(APIView):
     permission_classes = [AllowAny]

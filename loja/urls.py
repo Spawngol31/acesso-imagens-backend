@@ -4,7 +4,8 @@ from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     CarrinhoView, 
-    MercadoPagoCheckoutView, 
+    MercadoPagoCheckoutView,
+    MercadoPagoProcessPaymentView, 
     MercadoPagoWebhookView, 
     MinhasComprasView, 
     DownloadFotoView, 
@@ -25,6 +26,7 @@ urlpatterns = [
     path('carrinho/aplicar-cupom/', AplicarCupomView.as_view(), name='aplicar-cupom'),
 
     path('checkout/mp/', MercadoPagoCheckoutView.as_view(), name='mp-checkout'),
+    path('checkout/mp/process/', MercadoPagoProcessPaymentView.as_view(), name='mp-process'), # <--- ADICIONE ESTA LINHA
     path('webhooks/mp/', MercadoPagoWebhookView.as_view(), name='mp-webhook'),
 
     path('minhas-compras/', MinhasComprasView.as_view(), name='minhas-compras'),
