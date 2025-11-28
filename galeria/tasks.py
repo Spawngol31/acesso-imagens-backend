@@ -64,7 +64,7 @@ def processar_foto_task(foto_id):
             print(f"--- [CELERY] Gerando miniatura com marca d'água... ---")
             original_image = Image.open(BytesIO(image_bytes)).convert("RGBA")
             
-            size = (1024, 1024)
+            size = (600, 600)
             original_image.thumbnail(size)
             img_width, img_height = original_image.size
 
