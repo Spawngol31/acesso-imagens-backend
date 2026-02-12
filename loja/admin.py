@@ -16,7 +16,7 @@ class ItemPedidoInline(admin.TabularInline):
 class PedidoAdmin(admin.ModelAdmin):
     list_display = ('id', 'cliente', 'status', 'valor_total', 'criado_em')
     list_filter = ('status', 'criado_em', 'cliente')
-    search_fields = ('cliente__email', 'stripe_payment_intent_id')
+    search_fields = ('cliente__email', 'id_pagamento_externo')
     inlines = [ItemPedidoInline] # Adiciona a visualização dos itens dentro do pedido
 
 @admin.register(ItemPedido)

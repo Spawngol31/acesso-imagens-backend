@@ -57,15 +57,32 @@ class CarrinhoSerializer(serializers.ModelSerializer):
         return sum(item.foto.preco for item in obj.itens.all())
 
     def get_desconto(self, obj):
-        if obj.cupom and obj.cupom.is_valido():
-            subtotal = self.get_subtotal(obj)
-            return round(subtotal * (obj.cupom.desconto_percentual / Decimal('100.0')), 2)
-    
-        if obj.itens.count() >= 5:
-            subtotal = self.get_subtotal(obj)
-            return round(subtotal * Decimal('0.10'), 2)
+        # Lógica 1: Validação básica do cupom
+        if not obj.cupom or not obj.cupom.is_valido():
+             # Lógica de desconto automático por quantidade (mantida)
+            if obj.itens.count() >= 5:
+                subtotal = self.get_subtotal(obj)
+                return round(subtotal * Decimal('0.10'), 2)
+            return Decimal('0.00')
+
+        # --- CORREÇÃO DA LÓGICA DE MARKETPLACE ---
+        # O cupom pertence a um fotógrafo específico.
+        # O desconto só deve ser aplicado aos itens desse fotógrafo.
         
-        return Decimal('0.00')
+        desconto_total = Decimal('0.00')
+        fotografo_dono_cupom = obj.cupom.fotografo
+        percentual = obj.cupom.desconto_percentual / Decimal('100.0')
+
+        for item in obj.itens.all():
+            # Acessa: ItemCarrinho -> Foto -> Album -> Fotógrafo
+            fotografo_da_foto = item.foto.album.fotografo
+            
+            # Se a foto for do dono do cupom, aplica o desconto NO PREÇO DA FOTO
+            if fotografo_da_foto == fotografo_dono_cupom:
+                valor_desconto_item = item.foto.preco * percentual
+                desconto_total += valor_desconto_item
+        
+        return round(desconto_total, 2)
     
     def get_total(self, obj):
         return self.get_subtotal(obj) - self.get_desconto(obj)

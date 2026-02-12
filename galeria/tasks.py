@@ -3,6 +3,7 @@ import os
 import boto3
 import ffmpeg
 import tempfile
+import shutil
 from io import BytesIO
 from PIL import Image, ImageOps
 
@@ -130,12 +131,15 @@ def gerar_miniatura_video_task(video_id):
                 local_video_file.write(s3_video_file.read())
 
         print(f"--- [CELERY] Extraindo frame com FFmpeg do ficheiro local... ---")
+        
+        ffmpeg_cmd = shutil.which('ffmpeg') or 'ffmpeg'
+
         (
             ffmpeg
             .input(temp_video_path, ss=1)
             .output(temp_thumb_path, vframes=1)
             .overwrite_output()
-            .run(cmd='C:/ffmpeg/bin/ffmpeg.exe', capture_stdout=True, capture_stderr=True) # Confirme se este caminho do ffmpeg está correto
+            .run(cmd=ffmpeg_cmd, capture_stdout=True, capture_stderr=True)
         )
 
         with open(temp_thumb_path, 'rb') as thumb_f:
