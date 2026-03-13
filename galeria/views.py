@@ -235,7 +235,13 @@ def album_share_preview(request, pk):
     frontend_url = f"{base_url}/album/{album.id}"
     
     # 2. URL da Capa do Álbum
-    image_url = album.capa.url if album.capa else ""
+    image_url = ""
+    if album.capa:
+        image_url = album.capa.url
+        # Se a URL for relativa (ex: /media/capa.jpg), o request.build_absolute_uri
+        # transforma em https://sua-api.com/media/capa.jpg
+        if not image_url.startswith('http'):
+            image_url = request.build_absolute_uri(image_url)
 
     # 3. HTML com as Meta Tags
     html = f"""
@@ -248,22 +254,18 @@ def album_share_preview(request, pk):
         <meta property="og:type" content="website">
         <meta property="og:url" content="{frontend_url}">
         <meta property="og:title" content="{album.titulo} | Acesso Imagens">
-        <meta property="og:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento e garanta a sua!'}">
+        <meta property="og:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento!'}">
         <meta property="og:image" content="{image_url}">
-
-        <meta name="twitter:card" content="summary_large_image">
-        <meta name="twitter:title" content="{album.titulo}">
-        <meta name="twitter:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento!'}">
-        <meta name="twitter:image" content="{image_url}">
+        
+        <meta property="og:image:width" content="800">
+        <meta property="og:image:height" content="800">
 
         <meta http-equiv="refresh" content="0; url={frontend_url}">
         <script>window.location.href = "{frontend_url}";</script>
     </head>
-    <body style="background-color: #f2e6f2; font-family: sans-serif; text-align: center; padding-top: 50px;">
-        <p style="color: #6c0464;">Redirecionando você para o álbum...</p>
-        <a href="{frontend_url}" style="color: #AD02AD;">Clique aqui se não for redirecionado automaticamente</a>
+    <body style="background-color: #f2e6f2; text-align: center; padding-top: 50px;">
+        <p>Redirecionando você para o álbum...</p>
     </body>
     </html>
     """
-    
     return HttpResponse(html)
