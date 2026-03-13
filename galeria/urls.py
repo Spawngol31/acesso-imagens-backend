@@ -7,10 +7,11 @@ from .views import (
     AlbumDetailView, 
     BuscaFacialView,
     FotoUploadView,
-    VideoUploadDashboardView,  # <-- Nome corrigido
+    VideoUploadDashboardView,
     AlbumViewSet,
     FotoViewSet,
-    VideoViewSet
+    VideoViewSet,
+    album_share_preview  # <--- 1. ADICIONE A NOVA VIEW AQUI NO IMPORT
 )
 
 # Roteador para os endpoints do painel (Dashboard)
@@ -25,8 +26,11 @@ urlpatterns = [
     path('albuns/<int:id>/', AlbumDetailView.as_view(), name='album-detail'),
     path('fotos/busca-facial/', BuscaFacialView.as_view(), name='busca-facial'),
     
+    # --- 2. NOVA ROTA DE COMPARTILHAMENTO ---
+    path('share/album/<int:pk>/', album_share_preview, name='album-share'),
+    
     # URLs do Painel (para fotógrafos/admins)
     path('fotos/upload/', FotoUploadView.as_view(), name='foto-upload'),
-    path('dashboard/videos/upload/', VideoUploadDashboardView.as_view(), name='video-upload'), # <-- Nome corrigido
+    path('dashboard/videos/upload/', VideoUploadDashboardView.as_view(), name='video-upload'),
     path('dashboard/', include(dashboard_router.urls)),
 ]

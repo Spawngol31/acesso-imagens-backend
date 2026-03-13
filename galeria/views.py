@@ -9,6 +9,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.decorators import action
 from decimal import Decimal, InvalidOperation
 
+# --- NOVO IMPORT NECESSÁRIO PARA O PREVIEW ---
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
+# ---------------------------------------------
+
 # Importa os modelos
 from .models import Album, Foto, Video, FaceIndexada
 
@@ -212,3 +217,53 @@ class VideoViewSet(viewsets.ModelViewSet):
         if self.request.user.papel == 'ADMIN':
             return Video.objects.all()
         return Video.objects.filter(album__fotografo=self.request.user)
+    
+    # =========================================================================
+# --- NOVA VIEW PARA COMPARTILHAMENTO NO WHATSAPP (Adicione no final) ---
+# =========================================================================
+
+def album_share_preview(request, pk):
+    """
+    Gera um HTML rápido com meta tags para o WhatsApp/Facebook/Instagram.
+    Ele exibe a capa e redireciona o usuário real para o Frontend React.
+    """
+    album = get_object_or_404(Album, pk=pk)
+    
+    # 1. URL do Frontend para onde o usuário será enviado quando clicar
+    # Remove a barra final do FRONTEND_URL se houver, para evitar '//'
+    base_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
+    frontend_url = f"{base_url}/album/{album.id}"
+    
+    # 2. URL da Capa do Álbum
+    image_url = album.capa.url if album.capa else ""
+
+    # 3. HTML com as Meta Tags
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="pt-br">
+    <head>
+        <meta charset="UTF-8">
+        <title>{album.titulo}</title>
+        
+        <meta property="og:type" content="website">
+        <meta property="og:url" content="{frontend_url}">
+        <meta property="og:title" content="{album.titulo} | Acesso Imagens">
+        <meta property="og:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento e garanta a sua!'}">
+        <meta property="og:image" content="{image_url}">
+
+        <meta name="twitter:card" content="summary_large_image">
+        <meta name="twitter:title" content="{album.titulo}">
+        <meta name="twitter:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento!'}">
+        <meta name="twitter:image" content="{image_url}">
+
+        <meta http-equiv="refresh" content="0; url={frontend_url}">
+        <script>window.location.href = "{frontend_url}";</script>
+    </head>
+    <body style="background-color: #f2e6f2; font-family: sans-serif; text-align: center; padding-top: 50px;">
+        <p style="color: #6c0464;">Redirecionando você para o álbum...</p>
+        <a href="{frontend_url}" style="color: #AD02AD;">Clique aqui se não for redirecionado automaticamente</a>
+    </body>
+    </html>
+    """
+    
+    return HttpResponse(html)
