@@ -223,27 +223,30 @@ class VideoViewSet(viewsets.ModelViewSet):
 # =========================================================================
 
 def album_share_preview(request, pk):
-    """
-    Gera um HTML rápido com meta tags para o WhatsApp/Facebook/Instagram.
-    Ele exibe a capa e redireciona o usuário real para o Frontend React.
-    """
     album = get_object_or_404(Album, pk=pk)
     
-    # 1. URL do Frontend para onde o usuário será enviado quando clicar
-    # Remove a barra final do FRONTEND_URL se houver, para evitar '//'
     base_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
     frontend_url = f"{base_url}/album/{album.id}"
     
-    # 2. URL da Capa do Álbum
+    # --- TRATAMENTO VIP PARA A IMAGEM ---
     image_url = ""
     if album.capa:
         image_url = album.capa.url
-        # Se a URL for relativa (ex: /media/capa.jpg), o request.build_absolute_uri
-        # transforma em https://sua-api.com/media/capa.jpg
+        
+        # 1. Garante que a URL é absoluta
         if not image_url.startswith('http'):
             image_url = request.build_absolute_uri(image_url)
+            
+        # 2. Força HTTPS (O WhatsApp bloqueia imagens em HTTP normal)
+        if image_url.startswith('http://'):
+            image_url = image_url.replace('http://', 'https://')
+            
+        # 3. O TRUQUE DE MESTRE: Limpa parâmetros do S3 (?Signature=...)
+        # Isso deixa a URL "limpa" (ex: https://meubucket.s3.com/media/capa.jpg)
+        if '?' in image_url:
+            image_url = image_url.split('?')[0]
+    # ------------------------------------
 
-    # 3. HTML com as Meta Tags
     html = f"""
     <!DOCTYPE html>
     <html lang="pt-br">
@@ -255,8 +258,10 @@ def album_share_preview(request, pk):
         <meta property="og:url" content="{frontend_url}">
         <meta property="og:title" content="{album.titulo} | Acesso Imagens">
         <meta property="og:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento!'}">
-        <meta property="og:image" content="{image_url}">
         
+        <meta property="og:image" itemprop="image" content="{image_url}">
+        <meta property="og:image:secure_url" content="{image_url}">
+        <meta property="og:image:type" content="image/jpeg">
         <meta property="og:image:width" content="800">
         <meta property="og:image:height" content="800">
 
