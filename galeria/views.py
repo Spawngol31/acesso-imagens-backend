@@ -228,24 +228,15 @@ def album_share_preview(request, pk):
     base_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
     frontend_url = f"{base_url}/album/{album.id}"
     
-    # --- TRATAMENTO VIP PARA A IMAGEM ---
     image_url = ""
     if album.capa:
         image_url = album.capa.url
-        
-        # 1. Garante que a URL é absoluta
         if not image_url.startswith('http'):
             image_url = request.build_absolute_uri(image_url)
-            
-        # 2. Força HTTPS (O WhatsApp bloqueia imagens em HTTP normal)
         if image_url.startswith('http://'):
             image_url = image_url.replace('http://', 'https://')
-            
-        # 3. O TRUQUE DE MESTRE: Limpa parâmetros do S3 (?Signature=...)
-        # Isso deixa a URL "limpa" (ex: https://meubucket.s3.com/media/capa.jpg)
         if '?' in image_url:
             image_url = image_url.split('?')[0]
-    # ------------------------------------
 
     html = f"""
     <!DOCTYPE html>
@@ -265,11 +256,13 @@ def album_share_preview(request, pk):
         <meta property="og:image:width" content="800">
         <meta property="og:image:height" content="800">
 
-        <meta http-equiv="refresh" content="0; url={frontend_url}">
-        <script>window.location.href = "{frontend_url}";</script>
+        <script>
+            window.location.replace("{frontend_url}");
+        </script>
     </head>
-    <body style="background-color: #f2e6f2; text-align: center; padding-top: 50px;">
-        <p>Redirecionando você para o álbum...</p>
+    <body style="background-color: #f2e6f2; text-align: center; padding-top: 50px; font-family: sans-serif;">
+        <p style="color: #6c0464;">Redirecionando você para o álbum...</p>
+        <a href="{frontend_url}" style="color: #AD02AD;">Clique aqui se não for redirecionado automaticamente</a>
     </body>
     </html>
     """
