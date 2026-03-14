@@ -250,11 +250,10 @@ def album_share_preview(request, pk):
         <meta property="og:title" content="{album.titulo} | Acesso Imagens">
         <meta property="og:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento!'}">
         
-        <meta property="og:image" itemprop="image" content="{image_url}">
+        <meta property="og:image" content="{image_url}">
         <meta property="og:image:secure_url" content="{image_url}">
         <meta property="og:image:type" content="image/jpeg">
-        <meta property="og:image:width" content="800">
-        <meta property="og:image:height" content="800">
+        <link rel="image_src" href="{image_url}">
 
         <script>
             window.location.replace("{frontend_url}");
@@ -262,7 +261,6 @@ def album_share_preview(request, pk):
     </head>
     <body style="background-color: #f2e6f2; text-align: center; padding-top: 50px; font-family: sans-serif;">
         <p style="color: #6c0464;">Redirecionando você para o álbum...</p>
-        <a href="{frontend_url}" style="color: #AD02AD;">Clique aqui se não for redirecionado automaticamente</a>
     </body>
     </html>
     """
