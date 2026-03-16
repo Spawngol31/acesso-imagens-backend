@@ -52,9 +52,11 @@ class WatermarkToolView(APIView):
             return Response({'error': 'Nenhuma imagem enviada.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Reusing the watermark logic
             original_image = Image.open(imagem_original_file).convert("RGBA")
-            original_image.thumbnail((1920, 1920), Image.Resampling.LANCZOS)
+            
+            # 1. ALTERAÇÃO AQUI: Diminuímos de 1920 para 800x800. 
+            # É o tamanho ideal para capas e pré-visualizações do WhatsApp.
+            original_image.thumbnail((800, 800), Image.Resampling.LANCZOS)
             img_width, img_height = original_image.size
 
             watermark_path = settings.BASE_DIR / 'assets' / 'watermark.PNG'
@@ -80,7 +82,10 @@ class WatermarkToolView(APIView):
                     final_image.paste(watermark, (x, y), mask=watermark)
 
             buffer = BytesIO()
-            final_image.convert("RGB").save(buffer, format='JPEG', quality=95)
+            
+            # 2. ALTERAÇÃO AQUI: Baixamos a qualidade para 75 e ativamos o optimize.
+            # A imagem continua bonita, mas o peso despenca.
+            final_image.convert("RGB").save(buffer, format='JPEG', quality=75, optimize=True)
             buffer.seek(0)
 
             original_filename = os.path.splitext(imagem_original_file.name)[0]
