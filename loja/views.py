@@ -207,7 +207,11 @@ class MercadoPagoWebhookView(APIView):
                 status_pagamento = payment.get("status")
                 external_ref = payment.get("external_reference")
                 
-                print(f"Status: {status_pagamento}, Pedido ID (Ref): {external_ref}")
+                # --- NOVIDADE: Pegamos como o cliente pagou ---
+                tipo_pagamento_mp = payment.get("payment_type_id") # ex: bank_transfer, credit_card
+                metodo_pagamento_mp = payment.get("payment_method_id") # ex: pix, visa, master
+                
+                print(f"Status: {status_pagamento}, Pedido ID (Ref): {external_ref}, Tipo: {tipo_pagamento_mp}")
 
                 if status_pagamento == "approved":
                     if not external_ref:
@@ -222,6 +226,24 @@ class MercadoPagoWebhookView(APIView):
                             return Response(status=status.HTTP_200_OK)
                         
                         print(f"Processando Pedido {pedido.id}...")
+                        
+                        # --- NOVIDADE: Traduzimos e salvamos a forma de pagamento ---
+                        traducao_pagamento = {
+                            'bank_transfer': 'Pix',
+                            'ticket': 'Boleto',
+                            'credit_card': 'Cartão de Crédito',
+                            'debit_card': 'Cartão de Débito',
+                            'account_money': 'Saldo Mercado Pago'
+                        }
+                        
+                        tipo_legivel = traducao_pagamento.get(tipo_pagamento_mp, "Mercado Pago")
+                        
+                        # Se for cartão, adicionamos a bandeira (ex: "Cartão de Crédito (VISA)")
+                        if metodo_pagamento_mp and tipo_pagamento_mp in ['credit_card', 'debit_card']:
+                            tipo_legivel += f" ({metodo_pagamento_mp.upper()})"
+                        
+                        # Atualiza o pedido com os novos dados
+                        pedido.metodo_pagamento = tipo_legivel
                         pedido.status = Pedido.StatusPedido.PAGO
                         pedido.save()
                         
@@ -229,7 +251,7 @@ class MercadoPagoWebhookView(APIView):
                             FotoComprada.objects.create(cliente=pedido.cliente, foto=item_pedido.foto)
                         
                         ItemCarrinho.objects.filter(carrinho__cliente=pedido.cliente).delete()
-                        print(f"SUCESSO: Pedido {pedido.id} finalizado!")
+                        print(f"SUCESSO: Pedido {pedido.id} finalizado e pago via {tipo_legivel}!")
                         
                     except Pedido.DoesNotExist:
                         print(f"ERRO: Pedido ID {external_ref} não encontrado.")
