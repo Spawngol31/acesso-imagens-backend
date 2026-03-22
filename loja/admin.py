@@ -3,6 +3,7 @@
 from django.contrib import admin, messages
 from django.db.models import Sum
 from .models import Pedido, ItemPedido, FotoComprada, Cupom
+from django.utils import timezone
 
 # --- 1. CRIAMOS O FILTRO FORÇADO DE FOTÓGRAFOS ---
 class FotografoFilter(admin.SimpleListFilter):
@@ -56,7 +57,8 @@ class ItemPedidoAdmin(admin.ModelAdmin):
         'get_fotografo', 
         'foto', 
         'get_data_venda', 
-        'get_metodo_pagamento', 
+        'get_metodo_pagamento',
+        'get_status_pedido', 
         'valor_venda', 
         'valor_fotografo'
     )
@@ -96,8 +98,15 @@ class ItemPedidoAdmin(admin.ModelAdmin):
     get_fotografo.short_description = 'Fotógrafo'
 
     def get_data_venda(self, obj):
-        return obj.pedido.criado_em.strftime("%d/%m/%Y %H:%M")
+        # A mágica acontece aqui: pegamos a hora de Londres e convertemos para São Paulo
+        data_local = timezone.localtime(obj.pedido.criado_em)
+        return data_local.strftime("%d/%m/%Y %H:%M")
     get_data_venda.short_description = 'Data'
+
+    def get_status_pedido(self, obj):
+        # Vai no pedido principal e pega o status dele (ex: PAGO, PENDENTE)
+        return obj.pedido.status
+    get_status_pedido.short_description = 'Status'
 
     def get_metodo_pagamento(self, obj):
         return getattr(obj.pedido, 'metodo_pagamento', 'Não informado')
