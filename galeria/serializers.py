@@ -49,7 +49,12 @@ class AlbumSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Album
-        fields = ['id', 'titulo', 'descricao', 'data_evento', 'fotografo', 'fotos_count', 'slug', 'capa_url', 'is_arquivado'] # Adicionámos 'is_arquivado'
+        fields = ['id', 'titulo', 'descricao', 'data_evento', 'fotografo', 'fotos_count', 'slug', 'capa_url', 'is_arquivado',
+                  'qtd_desconto_1', 'pct_desconto_1',
+                  'qtd_desconto_2', 'pct_desconto_2',
+                  'qtd_desconto_3', 'pct_desconto_3'
+                  ] # Adicionámos 'is_arquivado'
+            
 
     def get_capa_url(self, obj):
         # A capa do álbum também é pública
@@ -103,7 +108,10 @@ class AlbumDashboardSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'titulo', 'descricao', 'data_evento', 'categoria', 
             'local', 'is_publico', 'slug', 'fotografo',
-            'capa', 'is_arquivado'
+            'capa', 'is_arquivado', 
+            'qtd_desconto_1', 'pct_desconto_1',
+            'qtd_desconto_2', 'pct_desconto_2',
+            'qtd_desconto_3', 'pct_desconto_3'
         ]
         read_only_fields = ['slug', 'fotografo']
 

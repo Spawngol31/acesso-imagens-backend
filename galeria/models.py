@@ -36,8 +36,18 @@ class Album(models.Model):
     capa = models.ImageField(upload_to='album_capas/', null=True, blank=True, help_text="Imagem de capa do álbum.", storage=PublicMediaStorage())
     is_arquivado = models.BooleanField(default=False, help_text="Se marcado, o álbum não será visível no site público.")
 
+    # --- NOVOS CAMPOS: DESCONTO PROGRESSIVO POR QUANTIDADE ---
+    qtd_desconto_1 = models.PositiveIntegerField(default=0, help_text="Quantidade de fotos para ativar o Desconto 1 (Ex: 5)")
+    pct_desconto_1 = models.DecimalField(max_digits=5, decimal_places=2, default=0.00, help_text="Porcentagem do Desconto 1 (Ex: 5.00 para 5%)")
+    
+    qtd_desconto_2 = models.PositiveIntegerField(default=0, help_text="Quantidade de fotos para ativar o Desconto 2 (Ex: 10)")
+    pct_desconto_2 = models.DecimalField(max_digits=5, decimal_places=2, default=0.00, help_text="Porcentagem do Desconto 2 (Ex: 10.00 para 10%)")
+    
+    qtd_desconto_3 = models.PositiveIntegerField(default=0, help_text="Quantidade de fotos para ativar o Desconto 3 (Ex: 15)")
+    pct_desconto_3 = models.DecimalField(max_digits=5, decimal_places=2, default=0.00, help_text="Porcentagem do Desconto 3 (Ex: 15.00 para 15%)")
+    # ---------------------------------------------------------
+
     def save(self, *args, **kwargs):
-        # --- LÓGICA DE SLUG ROBUSTA (À PROVA DE ERROS) ---
         if not self.slug:
             original_slug = slugify(self.titulo)
             queryset = Album.objects.all()
@@ -57,7 +67,6 @@ class Album(models.Model):
 
     def __str__(self):
         return self.titulo
-    # O __str__ duplicado foi removido
 
 class Foto(models.Model):
     album = models.ForeignKey(Album, on_delete=models.CASCADE, related_name='fotos')

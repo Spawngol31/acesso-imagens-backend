@@ -57,31 +57,54 @@ class CarrinhoSerializer(serializers.ModelSerializer):
         return sum(item.foto.preco for item in obj.itens.all())
 
     def get_desconto(self, obj):
-        # Lógica 1: Validação básica do cupom
-        if not obj.cupom or not obj.cupom.is_valido():
-             # Lógica de desconto automático por quantidade (mantida)
-            if obj.itens.count() >= 5:
-                subtotal = self.get_subtotal(obj)
-                return round(subtotal * Decimal('0.10'), 2)
-            return Decimal('0.00')
-
-        # --- CORREÇÃO DA LÓGICA DE MARKETPLACE ---
-        # O cupom pertence a um fotógrafo específico.
-        # O desconto só deve ser aplicado aos itens desse fotógrafo.
-        
         desconto_total = Decimal('0.00')
-        fotografo_dono_cupom = obj.cupom.fotografo
-        percentual = obj.cupom.desconto_percentual / Decimal('100.0')
-
-        for item in obj.itens.all():
-            # Acessa: ItemCarrinho -> Foto -> Album -> Fotógrafo
-            fotografo_da_foto = item.foto.album.fotografo
-            
-            # Se a foto for do dono do cupom, aplica o desconto NO PREÇO DA FOTO
-            if fotografo_da_foto == fotografo_dono_cupom:
-                valor_desconto_item = item.foto.preco * percentual
-                desconto_total += valor_desconto_item
         
+        # 1. Primeiro verificamos os Descontos Progressivos dos Álbuns
+        # Precisamos agrupar as fotos do carrinho por álbum para saber quantas o cliente tem de cada
+        fotos_por_album = {}
+        for item in obj.itens.all():
+            album_id = item.foto.album.id
+            if album_id not in fotos_por_album:
+                fotos_por_album[album_id] = {
+                    'album': item.foto.album,
+                    'quantidade': 0,
+                    'valor_soma': Decimal('0.00')
+                }
+            fotos_por_album[album_id]['quantidade'] += 1
+            fotos_por_album[album_id]['valor_soma'] += item.foto.preco
+
+        # Agora calculamos o desconto para cada álbum com base nas quantidades
+        for dados in fotos_por_album.values():
+            album = dados['album']
+            qtd = dados['quantidade']
+            valor_album = dados['valor_soma']
+            
+            melhor_desconto_pct = Decimal('0.00')
+            
+            # Testa os 3 níveis (Pega sempre o maior desconto alcançado)
+            if album.qtd_desconto_1 > 0 and qtd >= album.qtd_desconto_1:
+                melhor_desconto_pct = max(melhor_desconto_pct, album.pct_desconto_1)
+            if album.qtd_desconto_2 > 0 and qtd >= album.qtd_desconto_2:
+                melhor_desconto_pct = max(melhor_desconto_pct, album.pct_desconto_2)
+            if album.qtd_desconto_3 > 0 and qtd >= album.qtd_desconto_3:
+                melhor_desconto_pct = max(melhor_desconto_pct, album.pct_desconto_3)
+            
+            if melhor_desconto_pct > 0:
+                desconto_album = valor_album * (melhor_desconto_pct / Decimal('100.0'))
+                desconto_total += desconto_album
+
+        # 2. Depois aplicamos a lógica do Cupom (se existir e for válido)
+        # O Cupom se soma aos descontos de volume, pois o cliente merece!
+        if obj.cupom and obj.cupom.is_valido():
+            fotografo_dono_cupom = obj.cupom.fotografo
+            percentual_cupom = obj.cupom.desconto_percentual / Decimal('100.0')
+
+            for item in obj.itens.all():
+                fotografo_da_foto = item.foto.album.fotografo
+                if fotografo_da_foto == fotografo_dono_cupom:
+                    valor_desconto_item = item.foto.preco * percentual_cupom
+                    desconto_total += valor_desconto_item
+                    
         return round(desconto_total, 2)
     
     def get_total(self, obj):
