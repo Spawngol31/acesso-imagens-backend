@@ -1,6 +1,9 @@
 # contas/views.py
 
 import os
+import urllib.request
+import json
+
 from django.core.mail import send_mail
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -17,6 +20,7 @@ from rest_framework.decorators import action
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.filters import SearchFilter
 from rest_framework_simplejwt.views import TokenObtainPairView
+from rest_framework_simplejwt.tokens import RefreshToken
 
 # --- CORREÇÃO NAS IMPORTAÇÕES ---
 # Importa APENAS os serializers necessários de 'serializers.py'
@@ -140,3 +144,131 @@ class CustomTokenObtainPairView(TokenObtainPairView):
     Usa o nosso serializer personalizado que faz o login com email.
     """
     serializer_class = CustomTokenObtainPairSerializer
+
+# --- NOVA FUNÇÃO MÁGICA: Gera tokens personalizados (com nome e papel) ---
+# Isso garante que o crachá do login social seja idêntico ao do login normal
+def get_tokens_for_user_with_claims(user):
+    refresh = RefreshToken.for_user(user)
+    
+    # Adicionamos a "mágica" aqui: o nome completo e papel dentro do token!
+    # O React (AuthContext/Header) espera exatamente estes nomes ('nome_completo', 'papel')
+    refresh['nome_completo'] = user.nome_completo or user.email
+    refresh['papel'] = user.papel or Usuario.Papel.CLIENTE # Garante que tenha um papel
+
+    return {
+        'refresh': str(refresh),
+        'access': str(refresh.access_token),
+    }
+
+# --- VIEW DO GOOGLE ATUALIZADA ---
+class GoogleLoginView(APIView):
+    authentication_classes = [] 
+    permission_classes = [AllowAny] 
+
+    def post(self, request):
+        token_google = request.data.get('credential')
+        if not token_google:
+            return Response({'error': 'Nenhum token foi recebido do React.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            from google.oauth2 import id_token
+            from google.auth.transport import requests as google_requests
+            
+            # 1. Django valida com o Google
+            idinfo = id_token.verify_oauth2_token(
+                token_google, google_requests.Request(), settings.GOOGLE_CLIENT_ID
+            )
+
+            email = idinfo['email']
+            nome = idinfo.get('name', 'Usuário Google')
+
+            # 2. Procura ou Cria o usuário
+            user, created = Usuario.objects.get_or_create(email=email, defaults={
+                'nome_completo': nome,
+                'papel': Usuario.Papel.CLIENTE, # <-- Define como cliente por padrão
+                'is_active': True
+            })
+
+            if created:
+                user.set_unusable_password()
+                user.save()
+
+            # --- ANTES: refresh = RefreshToken.for_user(user) ---
+
+            # --- DEPOIS (MUDANÇA AQUI): Usamos nossa função mágica ---
+            # Isso garante que o JWT tenha nome completo e papel
+            tokens = get_tokens_for_user_with_claims(user)
+            
+            return Response({
+                'refresh': tokens['refresh'], # <-- Usa tokens['refresh']
+                'access': tokens['access'],   # <-- Usa tokens['access']
+                'user': { # Retorno do user (bom p/ login imediato se AuthContext usar)
+                    'id': user.id,
+                    'email': user.email,
+                    'nome_completo': user.nome_completo,
+                    'papel': user.papel
+                }
+            })
+            
+        except ValueError:
+            return Response({'error': 'Autenticação do Google falhou.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# --- VIEW DO FACEBOOK ATUALIZADA ---
+class FacebookLoginView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token_facebook = request.data.get('accessToken')
+        if not token_facebook:
+            return Response({'error': 'Nenhum token foi recebido do React.'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            # 1. Django valida com o Facebook
+            url = f"https://graph.facebook.com/me?fields=id,name,email&access_token={token_facebook}"
+            req = urllib.request.Request(url)
+            with urllib.request.urlopen(req) as response:
+                resposta = json.loads(response.read().decode())
+
+            if 'error' in resposta:
+                return Response({'error': 'Token do Facebook inválido ou expirado.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            email = resposta.get('email')
+            nome = resposta.get('name', 'Usuário Facebook')
+
+            if not email:
+                return Response({'error': 'Precisamos da permissão de e-mail no Facebook.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 2. Procura ou Cria o usuário
+            user, created = Usuario.objects.get_or_create(email=email, defaults={
+                'nome_completo': nome,
+                'papel': Usuario.Papel.CLIENTE, # <-- Define como cliente por padrão
+                'is_active': True
+            })
+
+            if created:
+                user.set_unusable_password()
+                user.save()
+
+            # --- ANTES: refresh = RefreshToken.for_user(user) ---
+
+            # --- DEPOIS (MUDANÇA AQUI): Usamos nossa função mágica ---
+            # Isso garante que o JWT tenha nome completo e papel
+            tokens = get_tokens_for_user_with_claims(user)
+            
+            return Response({
+                'refresh': tokens['refresh'], # <-- Usa tokens['refresh']
+                'access': tokens['access'],   # <-- Usa tokens['access']
+                'user': { # Retorno do user (bom p/ login imediato se AuthContext usar)
+                    'id': user.id,
+                    'email': user.email,
+                    'nome_completo': user.nome_completo,
+                    'papel': user.papel
+                }
+            })
+            
+        except Exception as e:
+            print("ERRO NO LOGIN DO FACEBOOK:", str(e))
+            return Response({'error': f'Erro interno no servidor: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        

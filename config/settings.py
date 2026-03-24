@@ -166,6 +166,7 @@ MP_ACCESS_TOKEN = os.getenv('MP_ACCESS_TOKEN')
 MP_WEBHOOK_SECRET = os.getenv('MP_WEBHOOK_SECRET')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 BACKEND_URL = os.getenv('BACKEND_URL', 'http://localhost:8000')
+GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 
 # --- CONFIGURAÇÕES DE E-MAIL ---
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL')
@@ -182,3 +183,12 @@ else:
     EMAIL_USE_TLS = True
     EMAIL_HOST_USER = 'apikey' # Este é o username literal que o SendGrid exige
     EMAIL_HOST_PASSWORD = os.getenv('SENDGRID_API_KEY')
+
+    # --- SEGURANÇA EM PRODUÇÃO (HTTPS) ---
+if not DEBUG:
+    # Diz ao Django para confiar no proxy do servidor (Render/Heroku/AWS)
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    
+    # Exige que os cookies de login e formulários só trafeguem via HTTPS
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
