@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'perfis.apps.PerfisConfig',
     'storages',
     'core.apps.CoreConfig',
+    'rangefilter',
 ]
 
 MIDDLEWARE = [

@@ -1,9 +1,12 @@
 # loja/admin.py
 
+import csv
+from django.http import HttpResponse
 from django.contrib import admin, messages
 from django.db.models import Sum
 from .models import Pedido, ItemPedido, FotoComprada, Cupom
 from django.utils import timezone
+from rangefilter.filters import DateRangeFilter # <-- IMPORT NOVO PARA O CALENDÁRIO
 
 # --- 1. CRIAMOS O FILTRO FORÇADO DE FOTÓGRAFOS ---
 class FotografoFilter(admin.SimpleListFilter):
@@ -26,6 +29,50 @@ class FotografoFilter(admin.SimpleListFilter):
             return queryset.filter(foto__album__fotografo__id=self.value())
         return queryset
 
+# --- 2. AÇÃO MÁGICA: EXPORTAR PARA EXCEL (CSV) ---
+@admin.action(description='Imprimir Relatório de Pagamento (Excel)')
+def exportar_pagamento_csv(modeladmin, request, queryset):
+    # Configura o ficheiro para baixar com a codificação correta para acentos no Excel
+    response = HttpResponse(content_type='text/csv; charset=utf-8-sig') 
+    response['Content-Disposition'] = 'attachment; filename="relatorio_pagamento_fotografos.csv"'
+    
+    writer = csv.writer(response, delimiter=';')
+    
+    # Cabeçalho da Planilha
+    writer.writerow(['ID Pedido', 'Data da Venda', 'Status', 'Fotógrafo', 'ID da Foto', 'Valor da Venda (R$)', 'Comissão a Pagar (R$)'])
+    
+    total_geral_comissao = 0.0 # <--- Nossa nova variável para guardar o total!
+    
+    for item in queryset:
+        # Pega o fotógrafo respeitando o caminho do seu modelo (Foto -> Album -> Fotógrafo)
+        try:
+            nome_fotografo = item.foto.album.fotografo.nome_completo or item.foto.album.fotografo.email
+        except AttributeError:
+            nome_fotografo = "Desconhecido"
+
+        valor_venda = float(item.preco) if item.preco else 0.0
+        comissao = valor_venda * 0.95 # A sua taxa de 95% para o fotógrafo
+        
+        total_geral_comissao += comissao # <--- Vai somando o valor de cada linha
+
+        data_local = timezone.localtime(item.pedido.criado_em)
+
+        writer.writerow([
+            item.pedido.id,
+            data_local.strftime("%d/%m/%Y %H:%M"),
+            item.pedido.status,
+            nome_fotografo,
+            item.foto.id,
+            str(f"{valor_venda:.2f}").replace('.', ','),
+            str(f"{comissao:.2f}").replace('.', ',')
+        ])
+        
+    # --- ADICIONANDO A LINHA DE TOTAL NO FINAL DA PLANILHA ---
+    writer.writerow([]) # Uma linha em branco para separar e ficar bonito
+    writer.writerow(['', '', '', '', '', 'TOTAL A PAGAR:', str(f"{total_geral_comissao:.2f}").replace('.', ',')])
+        
+    return response
+
 # --------------------------------------------------
 
 class ItemPedidoInline(admin.TabularInline):
@@ -40,7 +87,7 @@ class ItemPedidoInline(admin.TabularInline):
 @admin.register(Pedido)
 class PedidoAdmin(admin.ModelAdmin):
     list_display = ('id', 'cliente', 'status', 'get_metodo_pagamento', 'valor_total', 'criado_em')
-    list_filter = ('status', 'criado_em', 'cliente')
+    list_filter = ('status', ('criado_em', DateRangeFilter), 'cliente') # Adicionado calendário aqui também
     search_fields = ('cliente__email', 'id_pagamento_externo')
     inlines = [ItemPedidoInline]
 
@@ -63,14 +110,17 @@ class ItemPedidoAdmin(admin.ModelAdmin):
         'valor_fotografo'
     )
     
-    # 2. COLOCAMOS O NOVO FILTRO AQUI!
+    # 3. COLOCAMOS O NOVO FILTRO DE CALENDÁRIO AQUI!
     list_filter = (
-        'pedido__criado_em',      
-        FotografoFilter, # <--- A mágica acontece aqui agora
+        ('pedido__criado_em', DateRangeFilter), # <--- Calendário De / Até
+        FotografoFilter, 
         'pedido__status',         
     )
     
     search_fields = ('foto__album__fotografo__email', 'pedido__id')
+
+    # Adicionando o botão de exportar na tela
+    actions = [exportar_pagamento_csv]
 
     # A MÁGICA DA SOMA AUTOMÁTICA NO TOPO DA TELA
     def changelist_view(self, request, extra_context=None):
@@ -93,7 +143,7 @@ class ItemPedidoAdmin(admin.ModelAdmin):
     def get_fotografo(self, obj):
         try:
             return obj.foto.album.fotografo.nome_completo
-        except Exception:
+        except AttributeError:
             return "Sem fotógrafo"
     get_fotografo.short_description = 'Fotógrafo'
 
