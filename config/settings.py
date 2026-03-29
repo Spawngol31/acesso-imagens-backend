@@ -171,23 +171,25 @@ GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
 
 # --- CONFIGURAÇÕES DE E-MAIL ---
 ADMIN_EMAIL = os.getenv('ADMIN_EMAIL')
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'nao-responda@acessoimagens.com.br')
 
-if DEBUG:
-    # Em desenvolvimento (local), imprime os e-mails no console
-    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
-else:
-    # Em produção (online no Render), usa o SendGrid (SMTP)
-    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-    EMAIL_HOST = 'smtp.sendgrid.net'
-    EMAIL_PORT = 587
-    EMAIL_USE_TLS = True
-    EMAIL_HOST_USER = 'apikey' # Este é o username literal que o SendGrid exige
-    EMAIL_HOST_PASSWORD = os.getenv('SENDGRID_API_KEY')
+# Usar o Gmail tanto em Desenvolvimento (local) quanto em Produção (online)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
 
-    # --- SEGURANÇA EM PRODUÇÃO (HTTPS) ---
+# Coloque aqui o e-mail do seu projeto:
+EMAIL_HOST_USER = 'jbq0101@gmail.com' 
+
+# A SENHA TEM DE ESTAR TUDO JUNTO (Sem espaços!):
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD') 
+
+# Como o e-mail vai aparecer para o cliente
+DEFAULT_FROM_EMAIL = 'Acesso Imagens <jbq0101@gmail.com>'
+
+# --- SEGURANÇA EM PRODUÇÃO (HTTPS) ---
 if not DEBUG:
-    # Diz ao Django para confiar no proxy do servidor (Render/Heroku/AWS)
+    # Diz ao Django para confiar no proxy do servidor (Render)
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     
     # Exige que os cookies de login e formulários só trafeguem via HTTPS

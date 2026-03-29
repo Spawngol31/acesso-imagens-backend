@@ -1,7 +1,7 @@
 # contas/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import PerfilUsuarioView, UserRegistrationView, PasswordResetRequestView, PasswordResetConfirmView, UserAdminViewSet, CustomTokenObtainPairView, GoogleLoginView, FacebookLoginView
+from .views import ImageProxyView, PerfilUsuarioView, UserRegistrationView, PasswordResetRequestView, PasswordResetConfirmView, UserAdminViewSet, CustomTokenObtainPairView, GoogleLoginView, FacebookLoginView
 from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
@@ -22,4 +22,5 @@ urlpatterns = [
     path('password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('auth/google/', GoogleLoginView.as_view(), name='google_login'),
     path('auth/facebook/', FacebookLoginView.as_view(), name='facebook_login'),
+    path('proxy-image/', ImageProxyView.as_view(), name='proxy_image'),
 ]

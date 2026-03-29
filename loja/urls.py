@@ -11,8 +11,10 @@ from .views import (
     DownloadFotoView, 
     VendasFotografoView, 
     CupomViewSet,
+    ExportarPagamentosCSVView,
     AplicarCupomView, 
-    AdminStatsView
+    AdminStatsView,
+    AdminVendasJSONView
 )
 
 # --- Cria um roteador para as ViewSets do dashboard deste app ---
@@ -34,6 +36,8 @@ urlpatterns = [
     
     path('dashboard/vendas/', VendasFotografoView.as_view(), name='dashboard-vendas'),
     path('admin/stats/', AdminStatsView.as_view(), name='admin-stats'),
+    path('admin/exportar-pagamentos/', ExportarPagamentosCSVView.as_view(), name='exportar-pagamentos'),
+    path('admin/vendas-json/', AdminVendasJSONView.as_view(), name='admin-vendas-json'),
 ]
 
 # --- Adiciona as URLs geradas pelo roteador à nossa lista ---

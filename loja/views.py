@@ -1,13 +1,19 @@
 # loja/views.py
 
+import csv
 import os, boto3, mercadopago
 import json # Import necessário para logs
+
 from botocore.exceptions import ClientError
 from decimal import Decimal
+
+from django.http import HttpResponse
 from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from django.db.models import Sum, Count
+
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets, generics
@@ -342,3 +348,139 @@ class AdminStatsView(APIView):
             'top_fotos': list(top_fotos),
         }
         return Response(data)
+    
+class ExportarPagamentosCSVView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        # 1. Pega TODOS os filtros que o React vai enviar
+        data_inicio = request.GET.get('data_inicio')
+        data_fim = request.GET.get('data_fim')
+        fotografo_id = request.GET.get('fotografo_id')
+        status = request.GET.get('status')
+        search = request.GET.get('search')
+
+        # 2. CORREÇÃO: Busca TODOS os itens do pedido (igual à tela)
+        vendas = ItemPedido.objects.all().order_by('-pedido__criado_em')
+
+        # 3. Aplica os filtros exatamente como na tela
+        if data_inicio:
+            vendas = vendas.filter(pedido__criado_em__date__gte=parse_date(data_inicio))
+        if data_fim:
+            vendas = vendas.filter(pedido__criado_em__date__lte=parse_date(data_fim))
+        if fotografo_id:
+            vendas = vendas.filter(foto__album__fotografo__id=fotografo_id)
+        if status:
+            vendas = vendas.filter(pedido__status=status) # Se não escolher status, traz todos (incluindo PENDENTE)
+        if search:
+            vendas = vendas.filter(pedido__id__icontains=search)
+
+        # 4. Prepara o arquivo Excel (CSV)
+        response = HttpResponse(content_type='text/csv; charset=utf-8-sig')
+        response['Content-Disposition'] = 'attachment; filename="relatorio_pagamentos_site.csv"'
+        writer = csv.writer(response, delimiter=';')
+        
+        # Cabeçalho
+        writer.writerow(['ID Pedido', 'Data da Venda', 'Status', 'Fotógrafo', 'ID da Foto', 'Valor da Venda (R$)', 'Comissão a Pagar (R$)'])
+        
+        total_geral = 0.0
+
+        # Preenche as linhas
+        for item in vendas:
+            try:
+                nome_fotografo = item.foto.album.fotografo.nome_completo or item.foto.album.fotografo.email
+            except AttributeError:
+                nome_fotografo = "Desconhecido"
+
+            valor = float(item.preco) if item.preco else 0.0
+            comissao = valor * 0.95 # A taxa do fotógrafo
+            total_geral += comissao
+
+            data_local = timezone.localtime(item.pedido.criado_em)
+
+            writer.writerow([
+                item.pedido.id,
+                data_local.strftime("%d/%m/%Y %H:%M"),
+                item.pedido.status,
+                nome_fotografo,
+                item.foto.id,
+                str(f"{valor:.2f}").replace('.', ','),
+                str(f"{comissao:.2f}").replace('.', ',')
+            ])
+
+        # Linha do Total Final
+        writer.writerow([])
+        writer.writerow(['', '', '', '', '', 'TOTAL A PAGAR:', str(f"{total_geral:.2f}").replace('.', ',')])
+
+        return response
+    
+class AdminVendasJSONView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        # 1. Pega os filtros da URL
+        data_inicio = request.GET.get('data_inicio')
+        data_fim = request.GET.get('data_fim')
+        fotografo_id = request.GET.get('fotografo_id')
+        status = request.GET.get('status')
+        search = request.GET.get('search')
+
+        # 2. Busca todos os itens
+        vendas = ItemPedido.objects.all().order_by('-pedido__criado_em')
+
+        # 3. Aplica os filtros
+        if data_inicio:
+            vendas = vendas.filter(pedido__criado_em__date__gte=parse_date(data_inicio))
+        if data_fim:
+            vendas = vendas.filter(pedido__criado_em__date__lte=parse_date(data_fim))
+        if fotografo_id:
+            vendas = vendas.filter(foto__album__fotografo__id=fotografo_id)
+        if status:
+            vendas = vendas.filter(pedido__status=status)
+        if search:
+            vendas = vendas.filter(pedido__id__icontains=search)
+
+        # 4. Calcula os Totais
+        total_vendas = vendas.aggregate(total=Sum('preco'))['total'] or 0
+        total_pagar = float(total_vendas) * 0.95
+
+        # --- NOVIDADE: PEGAR A LISTA DE FOTÓGRAFOS PARA O FILTRO ---
+        fotografos_db = ItemPedido.objects.filter(foto__album__fotografo__isnull=False).values_list(
+            'foto__album__fotografo__id', 
+            'foto__album__fotografo__nome_completo', 
+            'foto__album__fotografo__email'
+        ).distinct()
+        
+        lista_fotografos = [{"id": f[0], "nome": f[1] or f[2]} for f in fotografos_db]
+        # -----------------------------------------------------------
+
+        # 5. Monta a lista para a tabela
+        dados_tabela = []
+        for item in vendas:
+            try:
+                nome_fotografo = item.foto.album.fotografo.nome_completo or item.foto.album.fotografo.email
+            except AttributeError:
+                nome_fotografo = "Desconhecido"
+            
+            data_local = timezone.localtime(item.pedido.criado_em)
+            
+            dados_tabela.append({
+                "id": item.id,
+                "pedido_id": item.pedido.id,
+                "fotografo": nome_fotografo,
+                "foto_id": item.foto.id,
+                "data": data_local.strftime("%d/%m/%Y %H:%M"),
+                "forma_pgto": getattr(item.pedido, 'metodo_pagamento', 'MERCADO_PAGO'),
+                "status": item.pedido.status,
+                "valor_venda": float(item.preco) if item.preco else 0,
+                "comissao": (float(item.preco) * 0.95) if item.preco else 0
+            })
+
+        return Response({
+            "resumo": {
+                "total_vendas": total_vendas,
+                "total_pagar": total_pagar
+            },
+            "resultados": dados_tabela,
+            "fotografos": lista_fotografos # <--- Enviamos a lista para o React aqui!
+        })

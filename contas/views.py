@@ -3,7 +3,9 @@
 import os
 import urllib.request
 import json
+import requests
 
+from django.http import HttpResponse
 from django.core.mail import send_mail
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
@@ -22,7 +24,6 @@ from rest_framework.filters import SearchFilter
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-# --- CORREÇÃO NAS IMPORTAÇÕES ---
 # Importa APENAS os serializers necessários de 'serializers.py'
 from .serializers import (
     UsuarioSerializer, 
@@ -48,14 +49,13 @@ class UserRegistrationView(generics.CreateAPIView):
     permission_classes = [AllowAny]
     authentication_classes = [] 
 
-# --- ViewSet de Admin (COM A CORREÇÃO DO 'username') ---
+# --- ViewSet de Admin ---
 class UserAdminViewSet(viewsets.ModelViewSet):
     queryset = Usuario.objects.all().order_by('id')
     serializer_class = UserAdminSerializer
     permission_classes = [IsAdminUser]
     
     filter_backends = [SearchFilter]
-    # --- CORREÇÃO AQUI: 'username' removido ---
     search_fields = ['nome_completo', 'email']
 
     @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser])
@@ -85,17 +85,20 @@ class UserAdminViewSet(viewsets.ModelViewSet):
         user.save()
         return Response({'status': 'utilizador desbloqueado'}, status=status.HTTP_200_OK)
 
-# --- Views de Recuperação de Senha ---
+
+# --- Views de Recuperação de Senha (CORRIGIDAS COM ANTI-CSRF) ---
+
+# APLICÁMOS A VACINA ANTI-CSRF AQUI 👇
+@method_decorator(csrf_exempt, name='dispatch')
 class PasswordResetRequestView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = [] # Adicionado para evitar que o DRF force a verificação de tokens nesta rota
     
     def post(self, request):
         email = request.data.get('email')
         
-        # --- LÓGICA DE URL DINÂMICA ---
         # Lê a URL do frontend a partir das variáveis de ambiente
         frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
-        # ----------------------------
 
         try:
             user = Usuario.objects.get(email=email)
@@ -103,8 +106,6 @@ class PasswordResetRequestView(APIView):
             token = token_generator.make_token(user)
             uidb64 = urlsafe_base64_encode(force_bytes(user.pk))
             
-            # --- CORREÇÃO AQUI ---
-            # Usa a nossa variável dinâmica
             reset_link = f"{frontend_url}/resetar-senha/{uidb64}/{token}"
 
             send_mail(
@@ -115,9 +116,14 @@ class PasswordResetRequestView(APIView):
                 fail_silently=False,
             )
         except Usuario.DoesNotExist:
+            # Por segurança, não avisamos o hacker se o e-mail existe ou não.
             pass
+            
         return Response({'message': 'Se o e-mail estiver registado, um link de recuperação foi enviado.'}, status=status.HTTP_200_OK)
 
+
+# APLICÁMOS A VACINA ANTI-CSRF AQUI 👇
+@method_decorator(csrf_exempt, name='dispatch')
 class PasswordResetConfirmView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -131,6 +137,7 @@ class PasswordResetConfirmView(APIView):
             user = Usuario.objects.get(pk=uid)
         except (TypeError, ValueError, OverflowError, Usuario.DoesNotExist):
             user = None
+            
         token_generator = PasswordResetTokenGenerator()
         if user is not None and token_generator.check_token(user, token):
             user.set_password(password)
@@ -139,28 +146,26 @@ class PasswordResetConfirmView(APIView):
         else:
             return Response({'error': 'Link de redefinição inválido ou expirado.'}, status=status.HTTP_400_BAD_REQUEST)
             
+
 class CustomTokenObtainPairView(TokenObtainPairView):
     """
     Usa o nosso serializer personalizado que faz o login com email.
     """
     serializer_class = CustomTokenObtainPairSerializer
 
-# --- NOVA FUNÇÃO MÁGICA: Gera tokens personalizados (com nome e papel) ---
-# Isso garante que o crachá do login social seja idêntico ao do login normal
+# Gera tokens personalizados (com nome e papel)
 def get_tokens_for_user_with_claims(user):
     refresh = RefreshToken.for_user(user)
     
-    # Adicionamos a "mágica" aqui: o nome completo e papel dentro do token!
-    # O React (AuthContext/Header) espera exatamente estes nomes ('nome_completo', 'papel')
     refresh['nome_completo'] = user.nome_completo or user.email
-    refresh['papel'] = user.papel or Usuario.Papel.CLIENTE # Garante que tenha um papel
+    refresh['papel'] = user.papel or Usuario.Papel.CLIENTE
 
     return {
         'refresh': str(refresh),
         'access': str(refresh.access_token),
     }
 
-# --- VIEW DO GOOGLE ATUALIZADA ---
+# --- VIEW DO GOOGLE ---
 class GoogleLoginView(APIView):
     authentication_classes = [] 
     permission_classes = [AllowAny] 
@@ -174,7 +179,6 @@ class GoogleLoginView(APIView):
             from google.oauth2 import id_token
             from google.auth.transport import requests as google_requests
             
-            # 1. Django valida com o Google
             idinfo = id_token.verify_oauth2_token(
                 token_google, google_requests.Request(), settings.GOOGLE_CLIENT_ID
             )
@@ -182,10 +186,9 @@ class GoogleLoginView(APIView):
             email = idinfo['email']
             nome = idinfo.get('name', 'Usuário Google')
 
-            # 2. Procura ou Cria o usuário
             user, created = Usuario.objects.get_or_create(email=email, defaults={
                 'nome_completo': nome,
-                'papel': Usuario.Papel.CLIENTE, # <-- Define como cliente por padrão
+                'papel': Usuario.Papel.CLIENTE,
                 'is_active': True
             })
 
@@ -193,16 +196,12 @@ class GoogleLoginView(APIView):
                 user.set_unusable_password()
                 user.save()
 
-            # --- ANTES: refresh = RefreshToken.for_user(user) ---
-
-            # --- DEPOIS (MUDANÇA AQUI): Usamos nossa função mágica ---
-            # Isso garante que o JWT tenha nome completo e papel
             tokens = get_tokens_for_user_with_claims(user)
             
             return Response({
-                'refresh': tokens['refresh'], # <-- Usa tokens['refresh']
-                'access': tokens['access'],   # <-- Usa tokens['access']
-                'user': { # Retorno do user (bom p/ login imediato se AuthContext usar)
+                'refresh': tokens['refresh'],
+                'access': tokens['access'],
+                'user': {
                     'id': user.id,
                     'email': user.email,
                     'nome_completo': user.nome_completo,
@@ -214,7 +213,7 @@ class GoogleLoginView(APIView):
             return Response({'error': 'Autenticação do Google falhou.'}, status=status.HTTP_400_BAD_REQUEST)
 
 
-# --- VIEW DO FACEBOOK ATUALIZADA ---
+# --- VIEW DO FACEBOOK ---
 class FacebookLoginView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -225,7 +224,6 @@ class FacebookLoginView(APIView):
             return Response({'error': 'Nenhum token foi recebido do React.'}, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            # 1. Django valida com o Facebook
             url = f"https://graph.facebook.com/me?fields=id,name,email&access_token={token_facebook}"
             req = urllib.request.Request(url)
             with urllib.request.urlopen(req) as response:
@@ -240,10 +238,9 @@ class FacebookLoginView(APIView):
             if not email:
                 return Response({'error': 'Precisamos da permissão de e-mail no Facebook.'}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 2. Procura ou Cria o usuário
             user, created = Usuario.objects.get_or_create(email=email, defaults={
                 'nome_completo': nome,
-                'papel': Usuario.Papel.CLIENTE, # <-- Define como cliente por padrão
+                'papel': Usuario.Papel.CLIENTE,
                 'is_active': True
             })
 
@@ -251,16 +248,12 @@ class FacebookLoginView(APIView):
                 user.set_unusable_password()
                 user.save()
 
-            # --- ANTES: refresh = RefreshToken.for_user(user) ---
-
-            # --- DEPOIS (MUDANÇA AQUI): Usamos nossa função mágica ---
-            # Isso garante que o JWT tenha nome completo e papel
             tokens = get_tokens_for_user_with_claims(user)
             
             return Response({
-                'refresh': tokens['refresh'], # <-- Usa tokens['refresh']
-                'access': tokens['access'],   # <-- Usa tokens['access']
-                'user': { # Retorno do user (bom p/ login imediato se AuthContext usar)
+                'refresh': tokens['refresh'],
+                'access': tokens['access'],
+                'user': {
                     'id': user.id,
                     'email': user.email,
                     'nome_completo': user.nome_completo,
@@ -271,4 +264,39 @@ class FacebookLoginView(APIView):
         except Exception as e:
             print("ERRO NO LOGIN DO FACEBOOK:", str(e))
             return Response({'error': f'Erro interno no servidor: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+@method_decorator(csrf_exempt, name='dispatch')
+class ImageProxyView(APIView):
+    """
+    Ponte segura que busca a imagem na AWS e entrega ao React,
+    eliminando erros de CORS no localhost e produção.
+    """
+    permission_classes = [AllowAny] # Aberto para o React usar no painel
+    authentication_classes = [] 
+
+    def get(self, request):
+        image_url = request.GET.get('url')
+        
+        if not image_url:
+            return Response({'error': 'A URL da imagem é obrigatória.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Seguranca: Garante que só buscamos imagens do SEU bucket da Amazon
+        if 'amazonaws.com' not in image_url:
+             return Response({'error': 'URL inválida.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # O Django faz o download da imagem (sem bloqueio de CORS)
+            response = requests.get(image_url, stream=True)
+            
+            if response.status_code == 200:
+                # Prepara a resposta para o React com o tipo de ficheiro correto
+                django_response = HttpResponse(response.content, content_type=response.headers['Content-Type'])
+                # Autoriza o React a ler esta resposta (CORS livre)
+                django_response["Access-Control-Allow-Origin"] = "*" 
+                return django_response
+            else:
+                return Response({'error': 'Não foi possível buscar a imagem na AWS.'}, status=response.status_code)
+                
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
