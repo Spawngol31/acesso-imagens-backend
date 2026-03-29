@@ -30,7 +30,7 @@ class Album(models.Model):
     )
     criado_em = models.DateTimeField(auto_now_add=True)
     categoria = models.CharField(max_length=50, choices=Categoria.choices, default=Categoria.OUTRO)
-    local = models.CharField(max_length=255, blank=True, null=True)
+    local = models.CharField(max_length=200, blank=True, null=True, verbose_name="Local do Evento")
     is_publico = models.BooleanField(default=True, help_text="Se marcado, o álbum será visível para todos os visitantes.")
     slug = models.SlugField(unique=True, max_length=255, blank=True, help_text="Link personalizado. Deixe em branco para gerar automaticamente.")
     capa = models.ImageField(upload_to='album_capas/', null=True, blank=True, help_text="Imagem de capa do álbum.", storage=PublicMediaStorage())

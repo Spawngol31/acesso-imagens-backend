@@ -43,18 +43,32 @@ class VideoSerializer(serializers.ModelSerializer):
 
 # --- SERIALIZER DE ÁLBUM (COM A LÓGICA CORRETA) ---
 class AlbumSerializer(serializers.ModelSerializer):
+    fotografo_nome = serializers.SerializerMethodField()
     fotografo = serializers.StringRelatedField()
     fotos_count = serializers.IntegerField(source='fotos.count', read_only=True)
     capa_url = serializers.SerializerMethodField()
     
     class Meta:
         model = Album
-        fields = ['id', 'titulo', 'descricao', 'data_evento', 'fotografo', 'fotos_count', 'slug', 'capa_url', 'is_arquivado',
+        fields = ['id', 'titulo', 'descricao', 'data_evento', 'fotografo', 'fotos_count', 'slug', 'local', 'fotografo_nome', 'capa_url', 'is_arquivado',
                   'qtd_desconto_1', 'pct_desconto_1',
                   'qtd_desconto_2', 'pct_desconto_2',
                   'qtd_desconto_3', 'pct_desconto_3'
                   ] # Adicionámos 'is_arquivado'
+
+    def get_fotografo_nome(self, obj):
+        if obj.fotografo:
+            # Agora usamos o campo exato que você criou no seu models.py!
+            nome = getattr(obj.fotografo, 'nome_completo', '')
             
+            # Se tiver nome_completo, envia ele
+            if nome:
+                return nome
+            
+            # Se por algum motivo estiver vazio, envia o e-mail como segurança
+            return getattr(obj.fotografo, 'email', '')
+            
+        return ""        
 
     def get_capa_url(self, obj):
         # A capa do álbum também é pública
