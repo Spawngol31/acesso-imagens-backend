@@ -196,13 +196,15 @@ if not DEBUG:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
 
-    # ==============================================================================
+# ==============================================================================
 # --- CONFIGURAÇÕES DE OTIMIZAÇÃO DO CELERY (FILA E MEMÓRIA) ---
 # ==============================================================================
 
-# 1. Conexão com o Redis (substitua pela sua URL real do Redis se for diferente)
+# 1. Conexão com o Redis (O Render vai usar a variável de ambiente REDIS_URL)
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+# DESATIVA o armazenamento de resultados (Isso resolve o travamento e poupa RAM!)
+CELERY_IGNORE_RESULT = True
 
 # 2. FILA INDIANA E PREVENÇÃO DE TRAVAMENTOS (OOM - Out of Memory)
 # Diz ao worker para pegar estritamente 1 tarefa de cada vez.
@@ -215,7 +217,7 @@ CELERY_WORKER_PREFETCH_MULTIPLIER = 1
 CELERY_ACKS_LATE = True
 
 # 4. TIMEOUTS E LIMPEZA
-# Se uma foto demorar mais de 1 hora a processar, algo correu mal.
+# Se uma foto demorar mais de 15 minutos a processar, algo correu mal.
 # Ele aborta e devolve à fila.
 broker_transport_options = {'visibility_timeout': 900}
 
