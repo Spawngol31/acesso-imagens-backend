@@ -195,3 +195,31 @@ if not DEBUG:
     # Exige que os cookies de login e formulários só trafeguem via HTTPS
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+
+    # ==============================================================================
+# --- CONFIGURAÇÕES DE OTIMIZAÇÃO DO CELERY (FILA E MEMÓRIA) ---
+# ==============================================================================
+
+# 1. Conexão com o Redis (substitua pela sua URL real do Redis se for diferente)
+CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+# 2. FILA INDIANA E PREVENÇÃO DE TRAVAMENTOS (OOM - Out of Memory)
+# Diz ao worker para pegar estritamente 1 tarefa de cada vez.
+# Isso impede que ele tente abraçar o mundo e travar a RAM do servidor de 2GB.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+
+# 3. RECUPERAÇÃO DE FALHAS
+# Se o servidor cair, reiniciar ou faltar RAM a meio de um processamento,
+# o Celery NÃO marca a tarefa como concluída. A foto volta para a fila!
+CELERY_ACKS_LATE = True
+
+# 4. TIMEOUTS E LIMPEZA
+# Se uma foto demorar mais de 1 hora a processar, algo correu mal.
+# Ele aborta e devolve à fila.
+broker_transport_options = {'visibility_timeout': 900}
+
+# Formato padrão de envio de mensagens
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'

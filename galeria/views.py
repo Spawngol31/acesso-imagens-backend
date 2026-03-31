@@ -1,6 +1,7 @@
 # galeria/views.py
 
 import boto3
+from django.core.files.base import ContentFile
 from django.conf import settings
 from rest_framework import generics, viewsets, status
 from rest_framework.views import APIView
@@ -185,6 +186,32 @@ class AlbumViewSet(viewsets.ModelViewSet):
         # Atualiza todos os vídeos do álbum de uma vez
         count = album.videos.all().update(preco=new_price)
         return Response({'status': f'{count} vídeos atualizados com sucesso para R$ {new_price:.2f}'})
+    
+    @action(detail=True, methods=['post'])
+    def definir_capa(self, request, pk=None):
+        album = self.get_object()
+        foto_id = request.data.get('foto_id')
+        
+        if not foto_id:
+            return Response({'error': 'ID da foto não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        foto = get_object_or_404(Foto, id=foto_id, album=album)
+
+        # --- MUDANÇA AQUI ---
+        # Verificamos se a miniatura do Celery já existe. 
+        # Se o fotógrafo clicar muito rápido antes do Celery terminar, o sistema avisa!
+        if not foto.miniatura_marca_dagua:
+            return Response({'error': 'A foto ainda está sendo processada. Aguarde uns instantes e tente novamente.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Lê a miniatura leve (já com marca d'água) e salva como a nova capa
+            nome_arquivo = f"capa_album_{album.id}_foto_{foto.id}.jpg"
+            album.capa.save(nome_arquivo, ContentFile(foto.miniatura_marca_dagua.read()), save=True)
+            
+            return Response({'status': 'Capa do álbum atualizada com sucesso!'})
+        except Exception as e:
+            print(f"Erro ao copiar miniatura para capa: {e}")
+            return Response({'error': 'Erro ao processar a imagem para a capa.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class FotoViewSet(viewsets.ModelViewSet):
     serializer_class = FotoDashboardSerializer
