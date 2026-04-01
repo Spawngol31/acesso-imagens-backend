@@ -55,15 +55,22 @@ class UsuarioAdmin(UserAdmin):
         if not obj:
             return []
         
-        inlines = self.inlines
-        # Se o utilizador é um cliente, mostra apenas o perfil de cliente
+        # --- MUDANÇA AQUI ---
+        # Criamos a lista de papéis que dão direito a ter um "PerfilFotografo" 
+        # (que agora funciona como um perfil de Colaborador Geral)
+        papeis_da_equipe = [
+            Usuario.Papel.FOTOGRAFO,
+            Usuario.Papel.JORNALISTA,
+            Usuario.Papel.ASSESSOR_IMPRENSA,
+            Usuario.Papel.ASSESSOR_COMUNICACAO,
+            Usuario.Papel.VIDEOMAKER,
+            Usuario.Papel.CRIADOR_CONTEUDO
+        ]
+
         if obj.papel == Usuario.Papel.CLIENTE:
-            inlines = [PerfilClienteInline]
-        # Se for fotógrafo, mostra apenas o perfil de fotógrafo
-        elif obj.papel == Usuario.Papel.FOTOGRAFO:
-            inlines = [PerfilFotografoInline]
-        # Se for Admin ou outro, não mostra nenhum
-        else:
-            inlines = []
-            
-        return [inline(self.model, self.admin_site) for inline in inlines]
+            return [PerfilClienteInline(self.model, self.admin_site)]
+        elif obj.papel in papeis_da_equipe:
+            return [PerfilFotografoInline(self.model, self.admin_site)]
+        
+        # Se for Admin, não mostra inlines
+        return []

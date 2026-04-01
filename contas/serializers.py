@@ -47,20 +47,29 @@ class UserAdminSerializer(serializers.ModelSerializer):
         perfil_cliente_data = validated_data.pop('perfil_cliente', None)
         perfil_fotografo_data = validated_data.pop('perfil_fotografo', None)
         
-        # 2. Atualiza o utilizador principal. Se o 'papel' mudar, o signal será acionado.
+        # 2. Atualiza o utilizador principal.
         instance = super().update(instance, validated_data)
 
         # 3. Atualiza os perfis DEPOIS de o utilizador ser atualizado.
-        #    Usamos 'refresh_from_db' para garantir que temos o objeto mais recente,
-        #    especialmente se o signal alterou os perfis.
         instance.refresh_from_db() 
         
+        # --- MUDANÇA AQUI ---
+        papeis_da_equipe = [
+            Usuario.Papel.FOTOGRAFO,
+            Usuario.Papel.JORNALISTA,
+            Usuario.Papel.ASSESSOR_IMPRENSA,
+            Usuario.Papel.ASSESSOR_COMUNICACAO,
+            Usuario.Papel.VIDEOMAKER,
+            Usuario.Papel.CRIADOR_CONTEUDO
+        ]
+
         if instance.papel == Usuario.Papel.CLIENTE and perfil_cliente_data and hasattr(instance, 'perfil_cliente'):
             perfil_serializer = PerfilClienteSerializer(instance.perfil_cliente, data=perfil_cliente_data, partial=True)
             perfil_serializer.is_valid(raise_exception=True)
             perfil_serializer.save()
 
-        elif instance.papel == Usuario.Papel.FOTOGRAFO and perfil_fotografo_data and hasattr(instance, 'perfil_fotografo'):
+        # Agora, qualquer membro da equipe pode ter os seus dados do Perfil gravados!
+        elif instance.papel in papeis_da_equipe and perfil_fotografo_data and hasattr(instance, 'perfil_fotografo'):
             perfil_serializer = PerfilFotografoSerializer(instance.perfil_fotografo, data=perfil_fotografo_data, partial=True)
             perfil_serializer.is_valid(raise_exception=True)
             perfil_serializer.save()
