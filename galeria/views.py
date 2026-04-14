@@ -1,6 +1,7 @@
 # galeria/views.py
 
 import boto3
+from django.db.models import Q
 from django.core.files.base import ContentFile
 from django.conf import settings
 from rest_framework import generics, viewsets, status
@@ -55,6 +56,17 @@ class AlbumDetailView(generics.RetrieveAPIView):
         response['Pragma'] = 'no-cache'
         response['Expires'] = '0'
         return response
+
+class StatusFilaProcessamentoView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Procura todas as fotos que ainda não têm a miniatura da marca d'água salva
+        fotos_na_fila = Foto.objects.filter(
+            Q(miniatura_marca_dagua='') | Q(miniatura_marca_dagua__isnull=True)
+        ).count()
+        
+        return Response({'fotos_na_fila': fotos_na_fila})
 
 class BuscaFacialView(APIView):
     permission_classes = [AllowAny]
@@ -245,7 +257,7 @@ class VideoViewSet(viewsets.ModelViewSet):
             return Video.objects.all()
         return Video.objects.filter(album__fotografo=self.request.user)
     
-    # =========================================================================
+# =========================================================================
 # --- NOVA VIEW PARA COMPARTILHAMENTO NO WHATSAPP (Adicione no final) ---
 # =========================================================================
 

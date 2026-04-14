@@ -13,6 +13,8 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 from django.db.models import Sum, Count
+from django.db import transaction
+from django.db.models import Q
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -24,7 +26,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 
 from contas.permissions import IsCliente, IsFotografoOrAdmin, IsAdminUser
-from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada
+from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada, HistoricoPagamentoFotografo
 from galeria.models import Foto
 from contas.models import Usuario
 from .serializers import (
@@ -440,11 +442,14 @@ class AdminVendasJSONView(APIView):
         if search:
             vendas = vendas.filter(pedido__id__icontains=search)
 
-        # 4. Calcula os Totais
-        total_vendas = vendas.aggregate(total=Sum('preco'))['total'] or 0
-        total_pagar = float(total_vendas) * 0.95
+        # --- NOVIDADE: CÁLCULO INTELIGENTE DOS TOTAIS ---
+        # Só somamos para pagar se a venda estiver como PAGO pelo cliente E AINDA NÃO PAGA ao fotógrafo
+        vendas_para_pagar = vendas.filter(pedido__status=Pedido.StatusPedido.PAGO, pago_ao_fotografo=False)
+        total_vendas_pendentes = vendas_para_pagar.aggregate(total=Sum('preco'))['total'] or 0
+        total_pagar_pendente = float(total_vendas_pendentes) * 0.95
+        # ------------------------------------------------
 
-        # --- NOVIDADE: PEGAR A LISTA DE FOTÓGRAFOS PARA O FILTRO ---
+        # Pega a lista de fotógrafos para o select do React
         fotografos_db = ItemPedido.objects.filter(foto__album__fotografo__isnull=False).values_list(
             'foto__album__fotografo__id', 
             'foto__album__fotografo__nome_completo', 
@@ -452,7 +457,6 @@ class AdminVendasJSONView(APIView):
         ).distinct()
         
         lista_fotografos = [{"id": f[0], "nome": f[1] or f[2]} for f in fotografos_db]
-        # -----------------------------------------------------------
 
         # 5. Monta a lista para a tabela
         dados_tabela = []
@@ -472,15 +476,168 @@ class AdminVendasJSONView(APIView):
                 "data": data_local.strftime("%d/%m/%Y %H:%M"),
                 "forma_pgto": getattr(item.pedido, 'metodo_pagamento', 'MERCADO_PAGO'),
                 "status": item.pedido.status,
+                "pago_ao_fotografo": item.pago_ao_fotografo, # <--- Enviamos a etiqueta nova!
                 "valor_venda": float(item.preco) if item.preco else 0,
                 "comissao": (float(item.preco) * 0.95) if item.preco else 0
             })
 
         return Response({
             "resumo": {
-                "total_vendas": total_vendas,
-                "total_pagar": total_pagar
+                "total_vendas": total_vendas_pendentes,
+                "total_pagar": total_pagar_pendente
             },
             "resultados": dados_tabela,
-            "fotografos": lista_fotografos # <--- Enviamos a lista para o React aqui!
+            "fotografos": lista_fotografos
         })
+    
+class RegistrarPagamentoFotografoView(APIView):
+    permission_classes = [IsAdminUser]
+
+    @transaction.atomic
+    def post(self, request):
+        fotografo_id = request.data.get('fotografo_id')
+        data_inicio = request.data.get('data_inicio')
+        data_fim = request.data.get('data_fim')
+        valor_pago = request.data.get('valor_pago')
+
+        if not fotografo_id or not valor_pago:
+            return Response({"erro": "Fotógrafo e valor são obrigatórios."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # 1. Busca os itens que devem ser pagos
+            filtros = Q(
+                pedido__status=Pedido.StatusPedido.PAGO,
+                foto__album__fotografo__id=fotografo_id,
+                pago_ao_fotografo=False
+            )
+
+            if data_inicio:
+                filtros &= Q(pedido__criado_em__date__gte=parse_date(data_inicio))
+            if data_fim:
+                filtros &= Q(pedido__criado_em__date__lte=parse_date(data_fim))
+
+            itens_pendentes = ItemPedido.objects.filter(filtros)
+
+            if not itens_pendentes.exists():
+                return Response(
+                    {"erro": "Nenhuma venda pendente encontrada para este filtro."}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # 2. Atualiza os itens (Mágica do Zerar)
+            total_atualizado = itens_pendentes.update(pago_ao_fotografo=True)
+
+            # 3. Cria o Recibo
+            fotografo = Usuario.objects.get(id=fotografo_id)
+            recibo = HistoricoPagamentoFotografo.objects.create(
+                fotografo=fotografo,
+                valor_pago=valor_pago,
+                referencia_inicio=parse_date(data_inicio) if data_inicio else None,
+                referencia_fim=parse_date(data_fim) if data_fim else None
+            )
+
+            return Response({
+                "mensagem": "Pagamento registrado com sucesso!",
+                "vendas_atualizadas": total_atualizado,
+                "recibo_id": recibo.id
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"erro": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+class AdminHistoricoPagamentosView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        historico = HistoricoPagamentoFotografo.objects.all().order_by('-data_pagamento')
+        
+        dados = []
+        for rec in historico:
+            data_local = timezone.localtime(rec.data_pagamento)
+            dados.append({
+                "id": rec.id,
+                "fotografo": rec.fotografo.nome_completo or rec.fotografo.email,
+                "data_pagamento": data_local.strftime("%d/%m/%Y %H:%M"),
+                "valor_pago": float(rec.valor_pago),
+                "referencia_inicio": rec.referencia_inicio.strftime("%d/%m/%Y") if rec.referencia_inicio else "Não filtrado",
+                "referencia_fim": rec.referencia_fim.strftime("%d/%m/%Y") if rec.referencia_fim else "Não filtrado"
+            })
+        
+        return Response(dados)
+    
+class FotografoVendasJSONView(APIView):
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
+
+    def get(self, request):
+        fotografo = request.user
+        data_inicio = request.GET.get('data_inicio')
+        data_fim = request.GET.get('data_fim')
+        status_repasse = request.GET.get('status_repasse') # Pode ser 'PENDENTE' ou 'PAGO'
+
+        # 1. Pega APENAS as vendas deste fotógrafo onde o cliente JÁ PAGOU
+        vendas = ItemPedido.objects.filter(
+            foto__album__fotografo=fotografo,
+            pedido__status=Pedido.StatusPedido.PAGO
+        ).order_by('-pedido__criado_em')
+
+        # 2. Aplica os filtros de data e status
+        if data_inicio:
+            vendas = vendas.filter(pedido__criado_em__date__gte=parse_date(data_inicio))
+        if data_fim:
+            vendas = vendas.filter(pedido__criado_em__date__lte=parse_date(data_fim))
+        if status_repasse == 'PAGO':
+            vendas = vendas.filter(pago_ao_fotografo=True)
+        elif status_repasse == 'PENDENTE':
+            vendas = vendas.filter(pago_ao_fotografo=False)
+
+        # 3. Calcula os Saldos Fixos (O que ele tem a receber hoje e o que já recebeu na vida)
+        saldo_pendente_db = ItemPedido.objects.filter(
+            foto__album__fotografo=fotografo,
+            pedido__status=Pedido.StatusPedido.PAGO,
+            pago_ao_fotografo=False
+        ).aggregate(total=Sum('preco'))['total'] or 0
+
+        total_ja_recebido_db = HistoricoPagamentoFotografo.objects.filter(
+            fotografo=fotografo
+        ).aggregate(total=Sum('valor_pago'))['total'] or 0
+
+        # 4. Monta a tabela
+        dados_tabela = []
+        for item in vendas:
+            data_local = timezone.localtime(item.pedido.criado_em)
+            dados_tabela.append({
+                "id": item.id,
+                "pedido_id": item.pedido.id,
+                "foto_id": item.foto.id,
+                "data": data_local.strftime("%d/%m/%Y %H:%M"),
+                "pago_ao_fotografo": item.pago_ao_fotografo,
+                "valor_venda": float(item.preco) if item.preco else 0,
+                "comissao": (float(item.preco) * 0.95) if item.preco else 0
+            })
+
+        return Response({
+            "resumo": {
+                "saldo_pendente": float(saldo_pendente_db) * 0.95,
+                "total_ja_recebido": float(total_ja_recebido_db)
+            },
+            "resultados": dados_tabela
+        })
+
+class FotografoHistoricoPagamentosView(APIView):
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
+
+    def get(self, request):
+        # Traz apenas os recibos deste fotógrafo específico
+        historico = HistoricoPagamentoFotografo.objects.filter(fotografo=request.user).order_by('-data_pagamento')
+        
+        dados = []
+        for rec in historico:
+            data_local = timezone.localtime(rec.data_pagamento)
+            dados.append({
+                "id": rec.id,
+                "data_pagamento": data_local.strftime("%d/%m/%Y %H:%M"),
+                "valor_pago": float(rec.valor_pago),
+                "referencia_inicio": rec.referencia_inicio.strftime("%d/%m/%Y") if rec.referencia_inicio else "-",
+                "referencia_fim": rec.referencia_fim.strftime("%d/%m/%Y") if rec.referencia_fim else "-"
+            })
+        return Response(dados)

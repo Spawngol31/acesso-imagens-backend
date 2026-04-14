@@ -57,6 +57,7 @@ class ItemPedido(models.Model):
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name='itens')
     foto = models.ForeignKey(Foto, on_delete=models.PROTECT) # PROTECT é perfeito aqui
     preco = models.DecimalField(max_digits=10, decimal_places=2)
+    pago_ao_fotografo = models.BooleanField(default=False)
 
     def __str__(self):
         return f"Item do Pedido {self.pedido.id} - Foto {self.foto.id}"
@@ -105,3 +106,20 @@ class Cupom(models.Model):
         if self.data_validade and self.data_validade < timezone.now().date():
             return False
         return True
+    
+    # --- 2. O NOVO MODELO DE RECIBOS/HISTÓRICO ---
+class HistoricoPagamentoFotografo(models.Model):
+    fotografo = models.ForeignKey(
+        Usuario, 
+        on_delete=models.CASCADE, 
+        limit_choices_to={'papel': Usuario.Papel.FOTOGRAFO}
+    )
+    data_pagamento = models.DateTimeField(auto_now_add=True)
+    valor_pago = models.DecimalField(max_digits=10, decimal_places=2)
+    
+    # Para saber de que período foi esse pagamento (opcional, mas ótimo para auditoria)
+    referencia_inicio = models.DateField(null=True, blank=True)
+    referencia_fim = models.DateField(null=True, blank=True)
+
+    def __str__(self):
+        return f"Pagamento R$ {self.valor_pago} para {self.fotografo.nome_completo} em {self.data_pagamento.strftime('%d/%m/%Y')}"
