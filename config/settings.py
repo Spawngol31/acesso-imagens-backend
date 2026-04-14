@@ -203,7 +203,7 @@ if not DEBUG:
 
 # 1. Conexão com o Redis (O Render vai usar a variável de ambiente REDIS_URL)
 CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+
 # DESATIVA o armazenamento de resultados (Isso resolve o travamento e poupa RAM!)
 CELERY_IGNORE_RESULT = True
 
