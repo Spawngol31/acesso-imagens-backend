@@ -32,6 +32,7 @@ from .serializers import (
     CustomTokenObtainPairSerializer
 )
 from .models import Usuario
+from perfis.models import PerfilFotografo
 from .permissions import IsAdminUser, IsFotografoOrAdmin
 
 # --- View do Perfil do Utilizador ---
@@ -300,3 +301,77 @@ class ImageProxyView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
+class MeuPerfilView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    # Lista de papéis que dão direito ao painel profissional
+    PAPEIS_EQUIPE = [
+        Usuario.Papel.FOTOGRAFO, Usuario.Papel.JORNALISTA, Usuario.Papel.ASSESSOR_IMPRENSA,
+        Usuario.Papel.ASSESSOR_COMUNICACAO, Usuario.Papel.VIDEOMAKER, Usuario.Papel.CRIADOR_CONTEUDO
+    ]
+
+    def get(self, request):
+        user = request.user
+        
+        # Dados básicos (Tabela Usuario)
+        dados = {
+            "nome_completo": user.nome_completo,
+            "email": user.email,
+            "papel": user.papel,
+        }
+        
+        # Dados profissionais (Tabela PerfilFotografo)
+        if user.papel in self.PAPEIS_EQUIPE:
+            try:
+                perfil = PerfilFotografo.objects.get(usuario=user)
+                dados.update({
+                    "cpf": getattr(perfil, 'cpf', ''),
+                    "endereco": getattr(perfil, 'endereco', ''),
+                    "cep": getattr(perfil, 'cep', ''),
+                    "rede_social": getattr(perfil, 'rede_social', ''),
+                    "registro_profissional": getattr(perfil, 'registro_profissional', ''),
+                    "numero_registro": getattr(perfil, 'numero_registro', ''),
+                    "banco": getattr(perfil, 'banco', ''),
+                    "agencia": getattr(perfil, 'agencia', ''),
+                    "conta": getattr(perfil, 'conta', ''),
+                    "chave_pix": getattr(perfil, 'chave_pix', ''),
+                })
+            except PerfilFotografo.DoesNotExist:
+                pass
+            
+        return Response(dados)
+
+    def patch(self, request):
+        user = request.user
+        data = request.data
+        
+        # 1. Atualiza a Tabela Usuario (Nome e Senha)
+        if 'nome_completo' in data: 
+            user.nome_completo = data['nome_completo']
+            
+        if 'nova_senha' in data and data['nova_senha']: 
+            user.set_password(data['nova_senha'])
+
+        user.save()
+
+        # 2. Atualiza a Tabela PerfilFotografo (Apenas se pertencer à equipa)
+        if user.papel in self.PAPEIS_EQUIPE:
+            perfil, created = PerfilFotografo.objects.get_or_create(usuario=user)
+            
+            # Repare que "foto_perfil" e "especialidade" NÃO ESTÃO AQUI. 
+            # O Django vai simplesmente ignorá-los se o fotógrafo tentar enviá-los,
+            # blindando o sistema para que só o Admin possa mexer nisso!
+            if 'cpf' in data: perfil.cpf = data['cpf']
+            if 'endereco' in data: perfil.endereco = data['endereco']
+            if 'cep' in data: perfil.cep = data['cep']
+            if 'rede_social' in data: perfil.rede_social = data['rede_social']
+            if 'registro_profissional' in data: perfil.registro_profissional = data['registro_profissional']
+            if 'numero_registro' in data: perfil.numero_registro = data['numero_registro']
+            if 'banco' in data: perfil.banco = data['banco']
+            if 'agencia' in data: perfil.agencia = data['agencia']
+            if 'conta' in data: perfil.conta = data['conta']
+            if 'chave_pix' in data: perfil.chave_pix = data['chave_pix']
+            
+            perfil.save()
+
+        return Response({"mensagem": "Perfil atualizado com sucesso!"}, status=status.HTTP_200_OK)
