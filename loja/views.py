@@ -602,13 +602,33 @@ class FotografoVendasJSONView(APIView):
         ).aggregate(total=Sum('valor_pago'))['total'] or 0
 
         # 4. Monta a tabela
+        # 4. Monta a tabela
         dados_tabela = []
         for item in vendas:
             data_local = timezone.localtime(item.pedido.criado_em)
+            
+            # --- TENTATIVA SEGURA DE BUSCAR O NOME ---
+            nome_cliente = "Desconhecido"
+            
+            # 1. Verifica se o campo se chama 'cliente' (o mais comum)
+            if hasattr(item.pedido, 'cliente') and item.pedido.cliente:
+                nome_cliente = item.pedido.cliente.nome_completo or item.pedido.cliente.email
+            
+            # 2. Verifica se o campo se chama 'user'
+            elif hasattr(item.pedido, 'user') and item.pedido.user:
+                nome_cliente = item.pedido.user.nome_completo or item.pedido.user.email
+            
+            # 3. Se for apenas texto salvo no pedido (ex: compras sem login)
+            elif hasattr(item.pedido, 'cliente_nome') and item.pedido.cliente_nome:
+                nome_cliente = item.pedido.cliente_nome
+            elif hasattr(item.pedido, 'cliente_email') and item.pedido.cliente_email:
+                nome_cliente = item.pedido.cliente_email
+            
             dados_tabela.append({
                 "id": item.id,
                 "pedido_id": item.pedido.id,
                 "foto_id": item.foto.id,
+                "cliente": nome_cliente,
                 "data": data_local.strftime("%d/%m/%Y %H:%M"),
                 "pago_ao_fotografo": item.pago_ao_fotografo,
                 "valor_venda": float(item.preco) if item.preco else 0,

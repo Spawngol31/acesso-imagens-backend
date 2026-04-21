@@ -19,7 +19,7 @@ ALLOWED_HOSTS = []
 if ALLOWED_HOSTS_STRING:
     ALLOWED_HOSTS = ALLOWED_HOSTS_STRING.split(',')
 if DEBUG:
-    ALLOWED_HOSTS.extend(['localhost', '127.0.0.1'])
+    ALLOWED_HOSTS.extend(['localhost', '127.0.0.1', '*'])
 
 # Application definition
 INSTALLED_APPS = [
@@ -138,6 +138,7 @@ if DEBUG:
     CORS_ALLOWED_ORIGINS.extend([
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://192.168.0.88:5173",
     ])
 CORS_ALLOW_CREDENTIALS = True
 
