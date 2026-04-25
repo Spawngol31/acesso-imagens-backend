@@ -54,10 +54,30 @@ class AlbumListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
 class AlbumDetailView(generics.RetrieveAPIView):
-    queryset = Album.objects.filter(is_publico=True, is_arquivado=False)
+    # queryset = Album.objects.filter(is_publico=True, is_arquivado=False)
     serializer_class = AlbumDetailSerializer
     permission_classes = [AllowAny]
     lookup_field = 'id'
+
+    def get_queryset(self):
+        user = self.request.user
+        
+        if user.is_authenticated:
+            # O Admin tem o poder de ver tudo
+            if user.papel == Usuario.Papel.ADMIN:
+                return Album.objects.all()
+            
+            # O fotógrafo pode ver os álbuns públicos E os seus próprios álbuns privados
+            papeis_equipe = [
+                Usuario.Papel.FOTOGRAFO, Usuario.Papel.JORNALISTA, 
+                Usuario.Papel.ASSESSOR_IMPRENSA, Usuario.Papel.ASSESSOR_COMUNICACAO, 
+                Usuario.Papel.VIDEOMAKER, Usuario.Papel.CRIADOR_CONTEUDO
+            ]
+            if user.papel in papeis_equipe:
+                return Album.objects.filter(Q(is_publico=True, is_arquivado=False) | Q(fotografo=user))
+                
+        # Visitantes ou Clientes normais só veem o que é público e não arquivado
+        return Album.objects.filter(is_publico=True, is_arquivado=False)
 
     def get(self, request, *args, **kwargs):
         response = super().get(request, *args, **kwargs)
