@@ -54,7 +54,10 @@ class CarrinhoSerializer(serializers.ModelSerializer):
         fields = ['id', 'cliente', 'criado_em', 'itens', 'subtotal', 'desconto', 'total', 'cupom']
         
     def get_subtotal(self, obj):
-        return sum(item.foto.preco for item in obj.itens.all())
+        # 1. Garante que começa com Decimal('0.00') e soma Decimal com Decimal
+        total = sum((item.foto.preco for item in obj.itens.all()), Decimal('0.00'))
+        # 2. Retorna arredondado
+        return round(total, 2)
 
     def get_desconto(self, obj):
         desconto_total = Decimal('0.00')

@@ -117,6 +117,11 @@ class ItemPedidoAdmin(admin.ModelAdmin):
         'pedido__status',         
     )
     
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # Diz ao Django para "pre-joinar" estas 3 tabelas de uma vez só!
+        return qs.select_related('foto', 'foto__album', 'foto__album__fotografo', 'pedido')
+
     search_fields = ('foto__album__fotografo__email', 'pedido__id')
 
     # Adicionando o botão de exportar na tela

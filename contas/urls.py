@@ -1,7 +1,7 @@
 # contas/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ImageProxyView, PerfilUsuarioView, UserRegistrationView, PasswordResetRequestView, PasswordResetConfirmView, UserAdminViewSet, CustomTokenObtainPairView, GoogleLoginView, FacebookLoginView, MeuPerfilView
+from .views import ImageProxyView, PerfilUsuarioView, UserRegistrationView, PasswordResetRequestView, PasswordResetConfirmView, UserAdminViewSet, CustomTokenObtainPairView, GoogleLoginView, FacebookLoginView, MeuPerfilView, JornalParceiroViewSet
 from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
@@ -11,6 +11,7 @@ from rest_framework_simplejwt.views import (
 # Roteador para os endpoints de administração de utilizadores
 admin_router = DefaultRouter()
 admin_router.register(r'users', UserAdminViewSet, basename='admin-user')
+admin_router.register(r'jornais-parceiros', JornalParceiroViewSet, basename='jornal-parceiro')
 
 urlpatterns = [
     path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),

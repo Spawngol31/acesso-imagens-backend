@@ -12,12 +12,10 @@ load_dotenv(dotenv_path=dotenv_path)
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY')
 
 # Lógica de DEBUG e HOSTS
-DEBUG = os.getenv('DEBUG', 'True') == 'True'
+DEBUG = os.getenv('DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS_STRING = os.getenv('DJANGO_ALLOWED_HOSTS', '')
-ALLOWED_HOSTS = []
-if ALLOWED_HOSTS_STRING:
-    ALLOWED_HOSTS = ALLOWED_HOSTS_STRING.split(',')
+hosts_env = os.getenv('DJANGO_ALLOWED_HOSTS', '')
+ALLOWED_HOSTS = [host.strip() for host in hosts_env.split(',') if host.strip()]
 if DEBUG:
     ALLOWED_HOSTS.extend(['localhost', '127.0.0.1', '*'])
 
@@ -47,8 +45,8 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
@@ -119,6 +117,9 @@ REST_FRAMEWORK = {
         'rest_framework_simplejwt.authentication.JWTAuthentication',
         'rest_framework.authentication.SessionAuthentication',
     ],
+    'DEFAULT_THROTTLE_RATES': {
+        'contato': '5/day',  # Permite no máximo 5 e-mails por IP por dia
+    }
 }
 
 # Configuração de CORS (Segurança entre domínios)
@@ -130,10 +131,8 @@ CORS_ALLOW_HEADERS = [
     'x-csrftoken',
     'x-requested-with',
 ]
-CORS_ALLOWED_ORIGINS_STRING = os.getenv('CORS_ALLOWED_ORIGINS', '')
-CORS_ALLOWED_ORIGINS = []
-if CORS_ALLOWED_ORIGINS_STRING:
-    CORS_ALLOWED_ORIGINS = CORS_ALLOWED_ORIGINS_STRING.split(',')
+cors_env = os.getenv('CORS_ALLOWED_ORIGINS', '')
+CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_env.split(',') if origin.strip()]
 if DEBUG:
     CORS_ALLOWED_ORIGINS.extend([
         "http://localhost:5173",
@@ -143,10 +142,8 @@ if DEBUG:
 CORS_ALLOW_CREDENTIALS = True
 
 # Configuração de CSRF (Segurança para Sessões)
-CSRF_TRUSTED_ORIGINS_STRING = os.getenv('CSRF_TRUSTED_ORIGINS', '')
-CSRF_TRUSTED_ORIGINS = []
-if CSRF_TRUSTED_ORIGINS_STRING:
-    CSRF_TRUSTED_ORIGINS = CSRF_TRUSTED_ORIGINS_STRING.split(',')
+csrf_env = os.getenv('CSRF_TRUSTED_ORIGINS', '')
+CSRF_TRUSTED_ORIGINS = [origin.strip() for origin in csrf_env.split(',') if origin.strip()]
 if DEBUG:
     CSRF_TRUSTED_ORIGINS.extend([
         "http://localhost:5173",
@@ -181,13 +178,13 @@ EMAIL_PORT = 587
 EMAIL_USE_TLS = True
 
 # Coloque aqui o e-mail do seu projeto:
-EMAIL_HOST_USER = 'jbq0101@gmail.com' 
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER') 
 
 # A SENHA TEM DE ESTAR TUDO JUNTO (Sem espaços!):
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD') 
 
 # Como o e-mail vai aparecer para o cliente
-DEFAULT_FROM_EMAIL = 'Acesso Imagens <jbq0101@gmail.com>'
+DEFAULT_FROM_EMAIL = f'Acesso Imagens <{EMAIL_HOST_USER}>'
 
 # --- SEGURANÇA EM PRODUÇÃO (HTTPS) ---
 if not DEBUG:
@@ -197,6 +194,7 @@ if not DEBUG:
     # Exige que os cookies de login e formulários só trafeguem via HTTPS
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+    SECURE_SSL_REDIRECT = True
 
 # ==============================================================================
 # --- CONFIGURAÇÕES DE OTIMIZAÇÃO DO CELERY (FILA E MEMÓRIA) ---

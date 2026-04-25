@@ -1,6 +1,6 @@
 import os
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageOps
 from django.conf import settings
 from django.core.mail import send_mail
 from django.http import HttpResponse
@@ -8,11 +8,14 @@ from django.http import HttpResponse
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from contas.permissions import IsFotografoOrAdmin
 
 class ContactFormView(APIView):
     permission_classes = [AllowAny]
+    throttle_classes = [ScopedRateThrottle] # <-- Adicione o limitador
+    throttle_scope = 'contato'              # <-- Dê um nome para a regra
 
     def post(self, request):
         nome = request.data.get('nome')
@@ -54,6 +57,15 @@ class WatermarkToolView(APIView):
         try:
             original_image = Image.open(imagem_original_file).convert("RGBA")
             
+            # Tenta corrigir a orientação usando EXIF. Se falhar (sem EXIF), segue em frente.
+            try:
+                original_image = ImageOps.exif_transpose(original_image)
+            except TypeError:
+                 pass # A imagem não tem tags EXIF de orientação, continua normal
+            
+            # CORREÇÃO AQUI: Garante que a foto fique em pé se foi tirada na vertical
+            original_image = ImageOps.exif_transpose(original_image)
+
             # 1. ALTERAÇÃO AQUI: Diminuímos de 1920 para 800x800. 
             # É o tamanho ideal para capas e pré-visualizações do WhatsApp.
             original_image.thumbnail((800, 800), Image.Resampling.LANCZOS)

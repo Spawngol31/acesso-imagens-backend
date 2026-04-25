@@ -14,7 +14,11 @@ from decimal import Decimal, InvalidOperation
 # --- NOVO IMPORT NECESSÁRIO PARA O PREVIEW ---
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-# ---------------------------------------------
+
+from PIL import Image, ImageOps
+from io import BytesIO
+
+from .tasks import distribuir_foto_para_ftps
 
 # Importa os modelos
 from .models import Album, Foto, Video, FaceIndexada
@@ -40,7 +44,12 @@ from contas.models import Usuario
 # --- VIEWS PÚBLICAS (PARA OS CLIENTES) ---
 
 class AlbumListView(generics.ListAPIView):
-    queryset = Album.objects.filter(is_publico=True, is_arquivado=False).order_by('-data_evento')
+    # CORREÇÃO: select_related('fotografo') mata as dezenas de queries extras!
+    queryset = Album.objects.filter(
+        is_publico=True, 
+        is_arquivado=False
+    ).select_related('fotografo').order_by('-data_evento')
+    
     serializer_class = AlbumSerializer
     permission_classes = [AllowAny]
 
@@ -77,6 +86,19 @@ class BuscaFacialView(APIView):
             return Response({"error": "Nenhuma imagem de referência enviada."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            image_bytes = imagem_referencia.read()
+
+            # --- NOVA PROTEÇÃO: REDIMENSIONA SELFIES COM MAIS DE 5MB ---
+            if len(image_bytes) > 5 * 1024 * 1024:
+                img = Image.open(BytesIO(image_bytes))
+                img = ImageOps.exif_transpose(img) # Garante que a selfie não fica deitada
+                img.thumbnail((1080, 1080), Image.Resampling.LANCZOS)
+                
+                buffer = BytesIO()
+                img.convert("RGB").save(buffer, format='JPEG', quality=85)
+                image_bytes = buffer.getvalue()
+
+                
             rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
             response = rekognition_client.search_faces_by_image(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
@@ -114,7 +136,24 @@ class BuscaFacialView(APIView):
 class FotoUploadView(generics.CreateAPIView):
     queryset = Foto.objects.all()
     serializer_class = FotoUploadSerializer
-    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
+
+    def perform_create(self, serializer):
+        # 1. Salva a foto na Amazon S3 e no Banco de Dados
+        foto = serializer.save()
+
+        # 2. Recebe a lista de jornais que o frontend enviou
+        # Ex: "1,4,5" -> o request.data.get('jornais')
+        jornais_string = self.request.data.get('jornais')
+
+        # 3. Se o fotógrafo escolheu algum jornal, dispara o Celery!
+        if jornais_string:
+            # Transforma a string "1,4,5" numa lista de números [1, 4, 5]
+            jornais_ids = [int(id_str.strip()) for id_str in jornais_string.split(',') if id_str.strip().isdigit()]
+            
+            if jornais_ids:
+                print(f"--- Disparando FTP manual para os jornais {jornais_ids} ---")
+                distribuir_foto_para_ftps.delay(foto.id, jornais_ids)
 
 class VideoUploadDashboardView(generics.CreateAPIView):
     queryset = Video.objects.all()

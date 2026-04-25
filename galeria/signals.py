@@ -1,6 +1,7 @@
 # galeria/signals.py
 
 from django.db.models.signals import post_save
+from django.db import transaction
 from django.dispatch import receiver
 
 # --- 1. Importações Corrigidas e Consolidadas ---
@@ -17,7 +18,7 @@ def processar_nova_foto_signal(sender, instance, created, **kwargs):
     # --- 2. Lógica de Verificação Melhorada ---
     if created and instance.imagem:
         print(f"--- Signal disparado para Foto ID: {instance.id}. Enviando para o Celery... ---")
-        processar_foto_task.delay(instance.id)
+        transaction.on_commit(lambda: processar_foto_task.delay(instance.id))
         
 @receiver(post_save, sender=Video)
 def processar_novo_video_signal(sender, instance, created, **kwargs):
@@ -27,4 +28,4 @@ def processar_novo_video_signal(sender, instance, created, **kwargs):
     # --- 2. Lógica de Verificação Melhorada ---
     if created and instance.arquivo_video:
         print(f"--- Signal disparado para Vídeo ID: {instance.id}. Enviando para o Celery... ---")
-        gerar_miniatura_video_task.delay(instance.id)
+        transaction.on_commit(lambda: gerar_miniatura_video_task.delay(instance.id))

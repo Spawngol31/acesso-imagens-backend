@@ -1,4 +1,5 @@
 # galeria/tasks.py
+import ftplib
 import os
 import boto3
 import ffmpeg
@@ -8,9 +9,11 @@ from io import BytesIO
 from PIL import Image, ImageOps
 
 from celery import shared_task
+from django.core.files.storage import default_storage
 from django.conf import settings
 from django.core.files.base import ContentFile
 from .models import Foto, FaceIndexada, Video # 'Album' foi removido desta linha
+from contas.models import JornalParceiro
 
 @shared_task
 def processar_foto_task(foto_id):
@@ -63,44 +66,48 @@ def processar_foto_task(foto_id):
         # --- LÓGICA DE GERAÇÃO DE MINIATURA ---
         if not foto.miniatura_marca_dagua:
             print(f"--- [CELERY] Gerando miniatura com marca d'água... ---")
-            original_image = Image.open(BytesIO(image_bytes)).convert("RGBA")
             
-            size = (600, 600)
-            original_image.thumbnail(size)
-            img_width, img_height = original_image.size
+            # PRIMEIRO WITH: Abre a imagem original e MANTÉM aberta
+            with Image.open(BytesIO(image_bytes)).convert("RGBA") as original_image:
+                size = (600, 600)
+                original_image.thumbnail(size)
+                img_width, img_height = original_image.size
 
-            watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
-            watermark = Image.open(watermark_path).convert("RGBA")
-            
-            PROPORCAO_MARCA = 0.20
-            new_wm_width = int(img_width * PROPORCAO_MARCA)
-            wm_ratio = new_wm_width / watermark.size[0]
-            new_wm_height = int(wm_ratio * watermark.size[1])
-            watermark = watermark.resize((new_wm_width, new_wm_height), Image.Resampling.LANCZOS)
-            wm_width, wm_height = watermark.size
-            
-            OPACIDADE = 0.3
-            alpha = watermark.getchannel('A')
-            alpha = alpha.point(lambda i: i * OPACIDADE)
-            watermark.putalpha(alpha)
+                watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
+                
+                # SEGUNDO WITH (DENTRO DO PRIMEIRO): Abre a marca d'água
+                with Image.open(watermark_path).convert("RGBA") as watermark:
+                    
+                    PROPORCAO_MARCA = 0.20
+                    new_wm_width = int(img_width * PROPORCAO_MARCA)
+                    wm_ratio = new_wm_width / watermark.size[0]
+                    new_wm_height = int(wm_ratio * watermark.size[1])
+                    watermark = watermark.resize((new_wm_width, new_wm_height), Image.Resampling.LANCZOS)
+                    wm_width, wm_height = watermark.size
+                    
+                    OPACIDADE = 0.3
+                    alpha = watermark.getchannel('A')
+                    alpha = alpha.point(lambda i: i * OPACIDADE)
+                    watermark.putalpha(alpha)
 
-            final_image = Image.new('RGBA', original_image.size, (0, 0, 0, 0))
-            final_image.paste(original_image, (0, 0))
-            
-            PADDING_X = int(img_width * 0.1)
-            PADDING_Y = int(img_height * 0.1)
-            for y in range(0, img_height, wm_height + PADDING_Y):
-                for x in range(0, img_width, wm_width + PADDING_X):
-                    final_image.paste(watermark, (x, y), mask=watermark)
+                    # Agora funciona, pois a 'original_image' ainda está aberta!
+                    final_image = Image.new('RGBA', original_image.size, (0, 0, 0, 0))
+                    final_image.paste(original_image, (0, 0))
+                    
+                    PADDING_X = int(img_width * 0.1)
+                    PADDING_Y = int(img_height * 0.1)
+                    for y in range(0, img_height, wm_height + PADDING_Y):
+                        for x in range(0, img_width, wm_width + PADDING_X):
+                            final_image.paste(watermark, (x, y), mask=watermark)
 
-            buffer = BytesIO()
-            final_image.convert("RGB").save(buffer, format='JPEG', quality=90)
-            buffer.seek(0)
-            
-            file_name = os.path.basename(foto.imagem.name)
-            foto.miniatura_marca_dagua.save(file_name, buffer, save=False)
-            foto.save(update_fields=['miniatura_marca_dagua'])
-            print(f"--- [CELERY] Miniatura para a foto {foto.id} salva com sucesso! ---")
+                    buffer = BytesIO()
+                    final_image.convert("RGB").save(buffer, format='JPEG', quality=90)
+                    buffer.seek(0)
+                    
+                    file_name = os.path.basename(foto.imagem.name)
+                    foto.miniatura_marca_dagua.save(file_name, buffer, save=False)
+                    foto.save(update_fields=['miniatura_marca_dagua'])
+                    print(f"--- [CELERY] Miniatura para a foto {foto.id} salva com sucesso! ---")
 
         print(f"--- [CELERY] Processamento completo para Foto ID: {foto.id} ---")
             
@@ -161,3 +168,54 @@ def gerar_miniatura_video_task(video_id):
             os.remove(temp_video_path)
         if temp_thumb_path and os.path.exists(temp_thumb_path):
             os.remove(temp_thumb_path)
+
+@shared_task
+def distribuir_foto_para_ftps(foto_id, jornais_ids=None):
+    try:
+        foto = Foto.objects.get(id=foto_id)
+        
+        # Filtra os jornais. Se a view enviou os IDs, pegamos só eles. 
+        # Se não enviou, pegamos todos os ativos.
+        if jornais_ids:
+            parceiros = JornalParceiro.objects.filter(id__in=jornais_ids, ativo=True)
+        else:
+            parceiros = JornalParceiro.objects.filter(ativo=True)
+
+        if not parceiros.exists():
+            return "Nenhum jornal parceiro ativo ou correspondente aos IDs encontrados."
+
+        # Lê os bytes da imagem
+        with foto.imagem.open('rb') as arquivo_foto:
+            file_data = arquivo_foto.read() 
+        
+        nome_arquivo = os.path.basename(foto.imagem.name)
+        resultados = []
+
+        # Faz o tour de entregas: passa em cada Jornal e entrega a foto
+        for parceiro in parceiros:
+            try:
+                ftp = ftplib.FTP()
+                
+                if ':' in parceiro.ftp_host:
+                    host, porta = parceiro.ftp_host.split(':')
+                    ftp.connect(host, int(porta))
+                else:
+                    ftp.connect(parceiro.ftp_host, 21)
+                    
+                ftp.login(user=parceiro.ftp_user, passwd=parceiro.ftp_password)
+                ftp.cwd(parceiro.ftp_pasta)
+                
+                # Guarda o arquivo no FTP do Jornal
+                ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(file_data))
+                ftp.quit()
+                
+                resultados.append(f"Enviado para: {parceiro.nome_jornal}")
+            except Exception as e:
+                resultados.append(f"Falha ao enviar para {parceiro.nome_jornal}: {str(e)}")
+
+        return resultados
+
+    except Foto.DoesNotExist:
+        return f"Erro: Foto {foto_id} não encontrada."
+    except Exception as e:
+        return f"Erro crítico na distribuição: {str(e)}"

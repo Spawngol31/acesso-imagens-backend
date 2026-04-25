@@ -25,6 +25,7 @@ class PerfilClienteSerializer(serializers.ModelSerializer):
     class Meta:
         model = PerfilCliente
         fields = ['cpf', 'endereco', 'cep']
+        read_only_fields = ['id']
 
 # Serializer para o perfil do fotógrafo no painel de admin
 class PerfilFotografoSerializer(serializers.ModelSerializer):
@@ -42,6 +43,7 @@ class PerfilFotografoSerializer(serializers.ModelSerializer):
             'registro_profissional', 'numero_registro', 'banco', 
             'agencia', 'conta', 'chave_pix'
         ]
+        read_only_fields = ['id', 'foto_perfil_url']
 
     # --- CORREÇÃO 2: Adicionar o método defensivo ---
     def get_foto_perfil_url(self, obj):

@@ -39,3 +39,21 @@ class Usuario(AbstractUser):
         # Agora o "nome oficial" do utilizador no sistema será o Nome Completo
         # Colocamos o "or self.email" como segurança caso o nome esteja vazio
         return self.nome_completo or self.email
+
+class JornalParceiro(models.Model):
+    # Liga este contrato de FTP a um usuário que seja FOTOGRAFO
+    usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.CASCADE,
+        limit_choices_to={'papel': Usuario.Papel.FOTOGRAFO},
+        related_name='ftp_config'
+    )
+    nome_jornal = models.CharField(max_length=150, help_text="Ex: Jornal O Globo")
+    ftp_host = models.CharField(max_length=200, help_text="Ex: ftp.oglobo.com.br")
+    ftp_user = models.CharField(max_length=100)
+    ftp_password = models.CharField(max_length=100)
+    ftp_pasta = models.CharField(max_length=100, default="/", help_text="Pasta de destino (ex: /public_html/esportes)")
+    ativo = models.BooleanField(default=True, help_text="Desmarque para suspender o envio para este jornal temporariamente.")
+
+    def __str__(self):
+        return f"{self.nome_jornal} (FTP)"    

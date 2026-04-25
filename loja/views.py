@@ -79,9 +79,12 @@ class AplicarCupomView(APIView):
             return Response({"error": "Cupom inválido."}, status=status.HTTP_404_NOT_FOUND)
         if not cupom.is_valido():
             return Response({"error": "Este cupom não é mais válido."}, status=status.HTTP_400_BAD_REQUEST)
-        primeiro_item = carrinho.itens.first()
-        if primeiro_item and cupom.fotografo != primeiro_item.foto.album.fotografo:
-            return Response({"error": "Este cupom não é válido para os itens no seu carrinho."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        tem_foto_valida = any(item.foto.album.fotografo == cupom.fotografo for item in carrinho.itens.all())
+        
+        if not tem_foto_valida:
+            return Response({"error": "Este cupom não é válido para nenhuma das fotos no seu carrinho."}, status=status.HTTP_400_BAD_REQUEST)
+        
         carrinho.cupom = cupom
         carrinho.save()
         serializer = CarrinhoSerializer(carrinho, context={'request': request})
@@ -176,9 +179,14 @@ class MercadoPagoProcessPaymentView(APIView):
             # --- CORREÇÃO AQUI: Força o external_reference ---
             # Se o frontend enviou o external_reference, garantimos que ele vai para o MP
             if 'external_reference' in payment_data:
-                print(f"--- Processando pagamento para Pedido ID: {payment_data['external_reference']} ---")
+                # 1. Busca o pedido no banco para descobrir o valor REAL
+                pedido = get_object_or_404(Pedido, id=payment_data['external_reference'], cliente=request.user)
+                
+                # 2. IGNORA o preço do frontend e FORÇA o preço do banco de dados
+                payment_data['transaction_amount'] = float(pedido.valor_total)
+                print(f"--- Processando pagamento para Pedido ID: {pedido.id} no valor de R$ {pedido.valor_total} ---")
             else:
-                print("--- AVISO: external_reference (ID do Pedido) não recebido do frontend! ---")
+                return Response({"error": "ID do pedido (external_reference) ausente."}, status=status.HTTP_400_BAD_REQUEST)
 
             payment_response = sdk.payment().create(payment_data)
             payment = payment_response["response"]
@@ -233,6 +241,13 @@ class MercadoPagoWebhookView(APIView):
                             print("Pedido já estava pago. Ignorando.")
                             return Response(status=status.HTTP_200_OK)
                         
+                        valor_pago_mp = payment.get("transaction_amount")
+                        if float(valor_pago_mp) < float(pedido.valor_total):
+                            print(f"FRAUDE BLOQUEADA: Tentativa de pagar R$ {valor_pago_mp} num pedido de R$ {pedido.valor_total}")
+                            # Retorna 200 OK pro Mercado Pago não ficar repetindo o envio, 
+                            # mas NÃO aprova o pedido no nosso banco de dados.
+                            return Response(status=status.HTTP_200_OK)
+
                         print(f"Processando Pedido {pedido.id}...")
                         
                         # --- NOVIDADE: Traduzimos e salvamos a forma de pagamento ---
@@ -415,7 +430,7 @@ class ExportarPagamentosCSVView(APIView):
         writer.writerow(['', '', '', '', '', 'TOTAL A PAGAR:', str(f"{total_geral:.2f}").replace('.', ',')])
 
         return response
-    
+
 class AdminVendasJSONView(APIView):
     permission_classes = [IsAdminUser]
 
@@ -489,7 +504,7 @@ class AdminVendasJSONView(APIView):
             "resultados": dados_tabela,
             "fotografos": lista_fotografos
         })
-    
+
 class RegistrarPagamentoFotografoView(APIView):
     permission_classes = [IsAdminUser]
 

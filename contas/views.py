@@ -29,17 +29,31 @@ from .serializers import (
     UsuarioSerializer, 
     UserRegistrationSerializer, 
     UserAdminSerializer,
-    CustomTokenObtainPairSerializer
+    CustomTokenObtainPairSerializer,
+    JornalParceiroSerializer
 )
-from .models import Usuario
+from .models import Usuario, JornalParceiro
 from perfis.models import PerfilFotografo
 from .permissions import IsAdminUser, IsFotografoOrAdmin
+from urllib.parse import urlparse
 
 # --- View do Perfil do Utilizador ---
 class PerfilUsuarioView(APIView):
     permission_classes = [IsAuthenticated]
     def get(self, request):
         serializer = UsuarioSerializer(request.user)
+        return Response(serializer.data)
+    
+class JornalParceiroViewSet(viewsets.ModelViewSet):
+    queryset = JornalParceiro.objects.all()
+    serializer_class = JornalParceiroSerializer
+    permission_classes = [IsAuthenticated]
+    
+    @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
+    def meus_jornais(self, request):
+        # Filtra apenas os jornais onde o 'usuario' é o cara que está logado
+        jornais = JornalParceiro.objects.filter(usuario=request.user, ativo=True)
+        serializer = self.get_serializer(jornais, many=True)
         return Response(serializer.data)
 
 # --- View de Registo de Utilizador ---
@@ -213,7 +227,6 @@ class GoogleLoginView(APIView):
         except ValueError:
             return Response({'error': 'Autenticação do Google falhou.'}, status=status.HTTP_400_BAD_REQUEST)
 
-
 # --- VIEW DO FACEBOOK ---
 class FacebookLoginView(APIView):
     authentication_classes = []
@@ -281,9 +294,12 @@ class ImageProxyView(APIView):
         if not image_url:
             return Response({'error': 'A URL da imagem é obrigatória.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Seguranca: Garante que só buscamos imagens do SEU bucket da Amazon
-        if 'amazonaws.com' not in image_url:
-             return Response({'error': 'URL inválida.'}, status=status.HTTP_400_BAD_REQUEST)
+        parsed_url = urlparse(image_url)
+        dominio = parsed_url.netloc # Pega apenas a parte "site.com"
+
+        # Garante que termine exatamente com amazonaws.com (ex: meu-bucket.s3.amazonaws.com)
+        if not dominio.endswith('amazonaws.com'):
+             return Response({'error': 'Domínio não autorizado.'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
             # O Django faz o download da imagem (sem bloqueio de CORS)

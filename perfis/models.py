@@ -1,6 +1,5 @@
-from django.db import models
-
 # perfis/models.py
+
 from django.db import models
 from contas.models import Usuario
 from config.storages import PublicMediaStorage
