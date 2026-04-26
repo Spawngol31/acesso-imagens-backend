@@ -7,6 +7,8 @@ import tempfile
 import shutil
 from io import BytesIO
 from PIL import Image, ImageOps
+from iptcinfo3 import IPTCInfo
+import logging
 
 from celery import shared_task
 from django.core.files.storage import default_storage
@@ -14,6 +16,9 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 from .models import Foto, FaceIndexada, Video # 'Album' foi removido desta linha
 from contas.models import JornalParceiro
+
+# Silenciar avisos desnecessários da biblioteca IPTC
+logging.getLogger('iptcinfo').setLevel(logging.ERROR)
 
 @shared_task
 def processar_foto_task(foto_id):
@@ -105,8 +110,7 @@ def processar_foto_task(foto_id):
                     buffer.seek(0)
                     
                     file_name = os.path.basename(foto.imagem.name)
-                    foto.miniatura_marca_dagua.save(file_name, buffer, save=False)
-                    foto.save(update_fields=['miniatura_marca_dagua'])
+                    foto.miniatura_marca_dagua.save(file_name, ContentFile(buffer.read()), save=True)
                     print(f"--- [CELERY] Miniatura para a foto {foto.id} salva com sucesso! ---")
 
         print(f"--- [CELERY] Processamento completo para Foto ID: {foto.id} ---")
@@ -172,7 +176,7 @@ def gerar_miniatura_video_task(video_id):
 @shared_task
 def distribuir_foto_para_ftps(foto_id, jornais_ids=None):
     try:
-        foto = Foto.objects.get(id=foto_id)
+        foto = Foto.objects.select_related('album', 'album__fotografo').get(id=foto_id)
         
         # Filtra os jornais. Se a view enviou os IDs, pegamos só eles. 
         # Se não enviou, pegamos todos os ativos.
@@ -185,8 +189,38 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None):
             return "Nenhum jornal parceiro ativo ou correspondente aos IDs encontrados."
 
         # Lê os bytes da imagem
-        with foto.imagem.open('rb') as arquivo_foto:
-            file_data = arquivo_foto.read() 
+        with foto.imagem.open('rb') as f:
+            img_data = f.read()
+
+        # 2. Injetar Metadados IPTC em memória
+        img_io = BytesIO(img_data)
+        info = IPTCInfo(img_io, force=True)
+
+        # --- PROTEÇÃO CONTRA CAMPOS VAZIOS (NONE) ---
+        titulo_seguro = foto.album.titulo or 'Sem título'
+        legenda_segura = foto.legenda or 'Foto do evento'
+        local_seguro = foto.album.local or 'Local não informado'
+        data_segura = foto.album.data_evento.strftime('%d/%m/%Y') if foto.album.data_evento else ''
+        nome_fotografo = foto.album.fotografo.nome_completo if foto.album.fotografo else 'Equipe Acesso Imagens'
+
+        # Preenchimento dos metadados (AGORA USANDO AS VARIÁVEIS SEGURAS 👇)
+        info['headline'] = titulo_seguro[:255]
+        
+        # Só coloca a data e o local se eles existirem de fato
+        texto_legenda = legenda_segura
+        if data_segura or local_seguro:
+            texto_legenda += f" - Ocorrido em {data_segura} em {local_seguro}."
+            
+        info['caption/abstract'] = texto_legenda
+        info['by-line'] = nome_fotografo
+        info['source'] = 'Acesso Imagens'
+        info['credit'] = 'Acesso Imagens'
+        info['city'] = local_seguro
+
+        # Salvar os metadados de volta nos bytes
+        buffer_final = BytesIO()
+        info.save_as(buffer_final)
+        img_com_metadados = buffer_final.getvalue() 
         
         nome_arquivo = os.path.basename(foto.imagem.name)
         resultados = []
@@ -206,7 +240,7 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None):
                 ftp.cwd(parceiro.ftp_pasta)
                 
                 # Guarda o arquivo no FTP do Jornal
-                ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(file_data))
+                ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_com_metadados))
                 ftp.quit()
                 
                 resultados.append(f"Enviado para: {parceiro.nome_jornal}")
