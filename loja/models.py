@@ -48,6 +48,33 @@ class Pedido(models.Model):
     )
     criado_em = models.DateTimeField(auto_now_add=True)
 
+    def save(self, *args, **kwargs):
+        # 1. Primeiro, salvamos o pedido normalmente para garantir que o "PAGO" foi gravado
+        super().save(*args, **kwargs)
+
+        # 2. Em seguida, verificamos: O status agora é PAGO?
+        # (⚠️ Importante: Verifique se no seu modelo a sigla é 'PAGO' em maiúsculo, ou 'pago', etc)
+        if self.status == 'PAGO':
+            
+            # Importamos aqui dentro para evitar erros de "Importação Circular" do Django
+            from .models import FotoComprada 
+
+            # 3. Pegamos todos os itens (fotos) que estão dentro deste pedido
+            # Se você usar um 'related_name' no ItemPedido, mude para self.itens.all()
+            # O padrão do Django é usar nome_do_modelo_set
+            itens_do_pedido = self.itens.all() 
+            
+            # 4. Para cada foto no carrinho, criamos o acesso do cliente
+            for item in itens_do_pedido:
+                
+                # Usamos o get_or_create em vez de .create() por segurança! 
+                # Se você salvar o pedido "PAGO" duas vezes no admin sem querer, 
+                # ele não vai duplicar a foto na área do cliente.
+                FotoComprada.objects.get_or_create(
+                    cliente=self.cliente,
+                    foto=item.foto
+                )
+
     def __str__(self):
         if self.cliente:
             return f"Pedido {self.id} - {self.cliente.email}"

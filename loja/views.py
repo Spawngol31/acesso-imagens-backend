@@ -7,6 +7,7 @@ import json # Import necessário para logs
 from botocore.exceptions import ClientError
 from decimal import Decimal
 
+from django.core.mail import send_mail
 from django.http import HttpResponse
 from django.conf import settings
 from django.shortcuts import get_object_or_404
@@ -315,6 +316,63 @@ class DownloadFotoView(APIView):
             print(f"ERRO ao gerar URL de download: {e}")
             return Response({"error": "Erro ao gerar link de download."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+class EnviarFotoEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, foto_id):
+        user = request.user
+        
+        # 1. Verifica se o cliente realmente comprou esta foto (Segurança!)
+        comprou = FotoComprada.objects.filter(cliente=user, foto_id=foto_id).exists()
+        if not comprou:
+            return Response({"error": "Você não tem permissão para baixar esta foto."}, status=403)
+
+        try:
+            foto = Foto.objects.get(id=foto_id)
+            
+            # 2. Pega a URL original da foto na AWS S3
+            # (Use a mesma lógica que você já usa na sua view normal de download)
+            url_download = foto.imagem.url 
+            
+            # Se você usar links temporários (presigned urls) do Boto3, gere-o aqui.
+            # url_download = gerar_presigned_url(foto.imagem.name) 
+
+            # 3. Monta o E-mail
+            assunto = f"Acesso Imagens - A sua foto do álbum {foto.album.titulo} chegou!"
+            
+            mensagem_html = f"""
+            <h2>Olá, {user.first_name or 'Cliente'}!</h2>
+            <p>Você solicitou o envio da sua foto comprada na plataforma <b>Acesso Imagens</b>.</p>
+            <p>Para baixar o ficheiro original em alta resolução, basta clicar no link abaixo. Ele pode ser aberto em qualquer navegador padrão (Chrome, Safari, etc).</p>
+            <br>
+            <a href="{url_download}" style="background-color: #6c0464; color: white; padding: 12px 20px; text-decoration: none; border-radius: 18px; font-weight: bold;">
+                ⬇️ Baixar Minha Foto
+            </a>
+            <br><br>
+            <p>Obrigado por comprar conosco!</p>
+            <p>Equipe Acesso Imagens</p>
+            """
+            
+            # 4. Dispara o E-mail
+            send_mail(
+                subject=assunto,
+                message="Abra este e-mail num cliente que suporte HTML para ver o link de download.",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                html_message=mensagem_html,
+                fail_silently=False,
+            )
+
+            return Response({
+                "message": "E-mail enviado com sucesso!", 
+                "email_destino": user.email
+            }, status=200)
+
+        except Foto.DoesNotExist:
+            return Response({"error": "Foto não encontrada."}, status=404)
+        except Exception as e:
+            return Response({"error": f"Erro interno: {str(e)}"}, status=500)
+        
 # --- VIEWS DOS PAINÉIS ---
 
 class VendasFotografoView(generics.ListAPIView):

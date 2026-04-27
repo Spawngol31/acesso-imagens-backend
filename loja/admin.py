@@ -183,9 +183,14 @@ class ItemPedidoAdmin(admin.ModelAdmin):
 
 @admin.register(FotoComprada)
 class FotoCompradaAdmin(admin.ModelAdmin):
-    list_display = ('cliente', 'foto', 'data_compra', 'data_expiracao')
-    list_filter = ('cliente',)
-    search_fields = ('cliente__email', 'foto__legenda')
+    list_display = ('cliente', 'foto', 'data_compra')
+    
+    # 🛡️ MÁGICA ATUALIZADA: Usamos apenas 'foto' e 'cliente' 
+    # (que são as chaves estrangeiras que você realmente tem no modelo)
+    raw_id_fields = ('foto', 'cliente') 
+    
+    # OPCIONAL: Protege os campos financeiros reais para não serem alterados por engano
+    # readonly_fields = ('foto', 'cliente')
 
 @admin.register(Cupom)
 class CupomAdmin(admin.ModelAdmin):

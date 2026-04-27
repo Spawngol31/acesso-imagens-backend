@@ -8,7 +8,8 @@ from .views import (
     MercadoPagoProcessPaymentView, 
     MercadoPagoWebhookView, 
     MinhasComprasView, 
-    DownloadFotoView, 
+    DownloadFotoView,
+    EnviarFotoEmailView,
     VendasFotografoView, 
     CupomViewSet,
     ExportarPagamentosCSVView,
@@ -37,7 +38,8 @@ urlpatterns = [
 
     path('minhas-compras/', MinhasComprasView.as_view(), name='minhas-compras'),
     path('download-foto/<int:foto_id>/', DownloadFotoView.as_view(), name='download-foto'),
-    
+    path('download-foto/<int:foto_id>/enviar-email/', EnviarFotoEmailView.as_view(), name='enviar_foto_email'),
+
     path('dashboard/minhas-vendas-json/', FotografoVendasJSONView.as_view(), name='fotografo-vendas-json'),
     path('dashboard/meus-recibos/', FotografoHistoricoPagamentosView.as_view(), name='fotografo-recibos'),
     path('dashboard/vendas/', VendasFotografoView.as_view(), name='dashboard-vendas'),
