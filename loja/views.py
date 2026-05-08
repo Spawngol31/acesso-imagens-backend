@@ -1,7 +1,7 @@
 # loja/views.py
 
 import csv
-import os, boto3, mercadopago
+import io, os, boto3, mercadopago, zipfile
 import json # Import necessário para logs
 
 from botocore.exceptions import ClientError
@@ -373,7 +373,159 @@ class EnviarFotoEmailView(APIView):
             return Response({"error": "Foto não encontrada."}, status=404)
         except Exception as e:
             return Response({"error": f"Erro interno: {str(e)}"}, status=500)
-        
+
+class BulkDownloadFotosZipView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        foto_ids = request.data.get('foto_ids', [])
+        if not foto_ids:
+            return Response({"error": "Nenhuma foto selecionada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. MÁGICA 1: Pega APENAS OS IDs ÚNICOS (Evita baixar a mesma foto 2x se ele comprou duplicado)
+        fotos_compradas_ids = FotoComprada.objects.filter(
+            cliente=request.user, 
+            foto_id__in=foto_ids, 
+            data_expiracao__gte=timezone.now()
+        ).values_list('foto_id', flat=True).distinct()
+
+        if not fotos_compradas_ids:
+            return Response({"error": "Nenhuma das fotos solicitadas é válida ou pertence a você."}, status=status.HTTP_403_FORBIDDEN)
+
+        # 2. Busca as fotos reais, de forma única
+        fotos_para_baixar = Foto.objects.filter(id__in=fotos_compradas_ids)
+
+        try:
+            s3_client = boto3.client(
+                's3', 
+                aws_access_key_id=settings.AWS_ACCESS_KEY_ID, 
+                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
+                region_name=settings.AWS_S3_REGION_NAME, 
+                config=boto3.session.Config(signature_version='s3v4')
+            )
+            bucket_name = settings.AWS_STORAGE_BUCKET_NAME
+
+            zip_buffer = io.BytesIO()
+            fotos_adicionadas = 0 # Contador para sabermos se deu tudo certo
+
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for foto in fotos_para_baixar:
+                    relative_path = foto.imagem.name
+                    storage_location = foto.imagem.storage.location
+                    full_key = f"{storage_location}/{relative_path}"
+                    
+                    file_name = f"acesso_imagens_foto_{foto.id}_{os.path.basename(full_key)}"
+
+                    try:
+                        s3_response = s3_client.get_object(Bucket=bucket_name, Key=full_key)
+                        foto_content = s3_response['Body'].read()
+                        zip_file.writestr(file_name, foto_content)
+                        fotos_adicionadas += 1
+                    except Exception as e:
+                        # MÁGICA 2: Agora ele te avisa no terminal se a foto sumiu do S3!
+                        print(f"⚠️ ERRO S3 - A foto {foto.id} falhou ou sumiu do bucket: {e}")
+                        continue
+
+            if fotos_adicionadas == 0:
+                return Response({"error": "Nenhuma imagem foi encontrada no servidor AWS."}, status=status.HTTP_404_NOT_FOUND)
+
+            zip_buffer.seek(0)
+            response = HttpResponse(zip_buffer, content_type='application/zip')
+            response['Content-Disposition'] = f'attachment; filename="acesso_imagens_pacote_{timezone.now().strftime("%Y%m%d%H%M")}.zip"'
+            
+            return response
+
+        except Exception as e:
+            print(f"ERRO CRÍTICO ao gerar ZIP: {e}")
+            return Response({"error": "Erro no servidor ao gerar o pacote ZIP."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class BulkEnviarFotosEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        foto_ids = request.data.get('foto_ids', [])
+        if not foto_ids:
+            return Response({"error": "Nenhuma foto selecionada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Pega IDs únicos para não mandar 2 links repetidos no email
+        fotos_compradas_ids = FotoComprada.objects.filter(
+            cliente=user, 
+            foto_id__in=foto_ids, 
+            data_expiracao__gte=timezone.now()
+        ).values_list('foto_id', flat=True).distinct()
+
+        if not fotos_compradas_ids:
+            return Response({"error": "Acesso negado às fotos solicitadas."}, status=status.HTTP_403_FORBIDDEN)
+
+        fotos_para_enviar = Foto.objects.select_related('album').filter(id__in=fotos_compradas_ids)
+
+        try:
+            s3_client = boto3.client(
+                's3', 
+                aws_access_key_id=settings.AWS_ACCESS_KEY_ID, 
+                aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
+                region_name=settings.AWS_S3_REGION_NAME, 
+                config=boto3.session.Config(signature_version='s3v4')
+            )
+            bucket_name = settings.AWS_STORAGE_BUCKET_NAME
+
+            links_html = ""
+            for foto in fotos_para_enviar:
+                relative_path = foto.imagem.name
+                storage_location = foto.imagem.storage.location
+                full_key = f"{storage_location}/{relative_path}"
+                file_name = os.path.basename(full_key)
+                
+                params = {
+                    'Bucket': bucket_name, 
+                    'Key': full_key, 
+                    'ResponseContentDisposition': f'attachment; filename="acesso_imagens_foto_{foto.id}_{file_name}"'
+                }
+                
+                download_url = s3_client.generate_presigned_url('get_object', Params=params, ExpiresIn=604800)
+                
+                links_html += f"""
+                <div style="margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 8px;">
+                    <p style="margin: 0 0 10px 0;"><strong>Foto #{foto.id}</strong> - Álbum: {foto.album.titulo}</p>
+                    <a href="{download_url}" style="background-color: #6c0464; color: white; padding: 10px 15px; text-decoration: none; border-radius: 18px; font-weight: bold; display: inline-block;">
+                        ⬇️ Baixar Imagem Original
+                    </a>
+                </div>
+                """
+
+            assunto = f"Acesso Imagens - O seu pacote com {fotos_para_enviar.count()} fotos chegou!"
+            
+            mensagem_html = f"""
+            <h2>Olá, {user.first_name or 'Cliente'}!</h2>
+            <p>Você solicitou o envio do seu pacote de fotos selecionadas da plataforma <b>Acesso Imagens</b>.</p>
+            <p>Para baixar os ficheiros originais em alta resolução, basta clicar nos botões abaixo. Os links deste e-mail expiram em 7 dias.</p>
+            <br>
+            {links_html}
+            <br><br>
+            <p>Obrigado por comprar conosco!</p>
+            <p>Equipe Acesso Imagens</p>
+            """
+            
+            send_mail(
+                subject=assunto,
+                message=f"Abra este e-mail num app que suporte HTML para baixar as suas {fotos_para_enviar.count()} fotos.",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[user.email],
+                html_message=mensagem_html,
+                fail_silently=False,
+            )
+
+            return Response({
+                "message": "E-mail enviado com sucesso!", 
+                "email_destino": user.email
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            print(f"ERRO ao enviar pacote por email: {e}")
+            return Response({"error": "Erro ao processar o envio por e-mail."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 # --- VIEWS DOS PAINÉIS ---
 
 class VendasFotografoView(generics.ListAPIView):

@@ -9,8 +9,6 @@ class FotografoListView(generics.ListAPIView):
     permission_classes = [AllowAny]
     serializer_class = FotografoPublicoSerializer
     
-    # Substituímos o 'queryset' fixo por uma função dinâmica que 
-    # filtra exatamente os membros da equipa que queremos exibir.
     def get_queryset(self):
         papeis_da_equipe = [
             Usuario.Papel.FOTOGRAFO,
@@ -21,7 +19,9 @@ class FotografoListView(generics.ListAPIView):
             Usuario.Papel.CRIADOR_CONTEUDO
         ]
         
+        # 🚀 APLICAÇÃO DA BOA PRÁTICA:
+        # Filtramos e já pedimos ao Banco de Dados para ordenar pelo ID do usuário
         return PerfilFotografo.objects.filter(
             usuario__is_active=True,
             usuario__papel__in=papeis_da_equipe
-        )
+        ).order_by('usuario__id') # Ordena do menor ID para o maior (mais antigos primeiro)

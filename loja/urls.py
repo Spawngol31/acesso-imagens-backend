@@ -19,7 +19,9 @@ from .views import (
     RegistrarPagamentoFotografoView,
     AdminHistoricoPagamentosView,
     FotografoVendasJSONView, 
-    FotografoHistoricoPagamentosView
+    FotografoHistoricoPagamentosView,
+    BulkDownloadFotosZipView,
+    BulkEnviarFotosEmailView
 )
 
 # --- Cria um roteador para as ViewSets do dashboard deste app ---
@@ -39,6 +41,8 @@ urlpatterns = [
     path('minhas-compras/', MinhasComprasView.as_view(), name='minhas-compras'),
     path('download-foto/<int:foto_id>/', DownloadFotoView.as_view(), name='download-foto'),
     path('download-foto/<int:foto_id>/enviar-email/', EnviarFotoEmailView.as_view(), name='enviar_foto_email'),
+    path('download-fotos-zip/', BulkDownloadFotosZipView.as_view(), name='bulk-download-zip'),
+    path('enviar-fotos-email/', BulkEnviarFotosEmailView.as_view(), name='bulk-enviar-email'),
 
     path('dashboard/minhas-vendas-json/', FotografoVendasJSONView.as_view(), name='fotografo-vendas-json'),
     path('dashboard/meus-recibos/', FotografoHistoricoPagamentosView.as_view(), name='fotografo-recibos'),
