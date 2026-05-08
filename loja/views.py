@@ -16,6 +16,7 @@ from django.utils.dateparse import parse_date
 from django.db.models import Sum, Count
 from django.db import transaction
 from django.db.models import Q
+from django.db.models import Prefetch
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -493,17 +494,44 @@ class AdminVendasJSONView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        # 1. Pega os filtros da URL
+        # 1. Verifica se o React está apenas pedindo os fotógrafos para abrir a tela
+        apenas_fotografos = request.GET.get('apenas_fotografos') == 'true'
+
+        # Pega a lista de fotógrafos para o select do React (Fazemos isso de qualquer forma)
+        fotografos_db = ItemPedido.objects.filter(foto__album__fotografo__isnull=False).values_list(
+            'foto__album__fotografo__id', 
+            'foto__album__fotografo__nome_completo', 
+            'foto__album__fotografo__email'
+        ).distinct()
+        
+        lista_fotografos = [{"id": f[0], "nome": f[1] or f[2]} for f in fotografos_db]
+
+        # ⚡ SE FOR MODO RÁPIDO (Carregamento inicial), DEVOLVE LOGO AQUI E POUPA O SERVIDOR!
+        if apenas_fotografos:
+            return Response({
+                "resumo": {"total_vendas": 0, "total_pagar": 0},
+                "resultados": [],
+                "fotografos": lista_fotografos
+            })
+
+        # --- SE PASSOU PELO IF ACIMA, É PORQUE ALGUÉM CLICOU EM "PESQUISAR" ---
+
+        # 2. Pega os filtros da URL
         data_inicio = request.GET.get('data_inicio')
         data_fim = request.GET.get('data_fim')
         fotografo_id = request.GET.get('fotografo_id')
         status = request.GET.get('status')
         search = request.GET.get('search')
 
-        # 2. Busca todos os itens
-        vendas = ItemPedido.objects.all().order_by('-pedido__criado_em')
+        # 3. Busca os itens COM OTIMIZAÇÃO EXTREMA
+        # Traz o pedido, as fotos, os álbuns e os fotógrafos de uma vez só!
+        vendas = ItemPedido.objects.select_related(
+            'pedido', 'foto', 'foto__album', 'foto__album__fotografo'
+        ).prefetch_related(
+            'pedido__itens' # Traz os outros itens do carrinho para podermos calcular o desconto
+        ).all().order_by('-pedido__criado_em')
 
-        # 3. Aplica os filtros
+        # 4. Aplica os filtros
         if data_inicio:
             vendas = vendas.filter(pedido__criado_em__date__gte=parse_date(data_inicio))
         if data_fim:
@@ -515,30 +543,33 @@ class AdminVendasJSONView(APIView):
         if search:
             vendas = vendas.filter(pedido__id__icontains=search)
 
-        # --- NOVIDADE: CÁLCULO INTELIGENTE DOS TOTAIS ---
-        # Só somamos para pagar se a venda estiver como PAGO pelo cliente E AINDA NÃO PAGA ao fotógrafo
-        vendas_para_pagar = vendas.filter(pedido__status=Pedido.StatusPedido.PAGO, pago_ao_fotografo=False)
-        total_vendas_pendentes = vendas_para_pagar.aggregate(total=Sum('preco'))['total'] or 0
-        total_pagar_pendente = float(total_vendas_pendentes) * 0.95
-        # ------------------------------------------------
-
-        # Pega a lista de fotógrafos para o select do React
-        fotografos_db = ItemPedido.objects.filter(foto__album__fotografo__isnull=False).values_list(
-            'foto__album__fotografo__id', 
-            'foto__album__fotografo__nome_completo', 
-            'foto__album__fotografo__email'
-        ).distinct()
-        
-        lista_fotografos = [{"id": f[0], "nome": f[1] or f[2]} for f in fotografos_db]
-
-        # 5. Monta a lista para a tabela
+        # 5. Monta a tabela e faz a Matemática Proporcional (A Mesma do admin.py!)
         dados_tabela = []
+        total_vendas_pendentes_reais = 0.0
+
         for item in vendas:
+            # Pega o nome do fotógrafo com segurança
             try:
                 nome_fotografo = item.foto.album.fotografo.nome_completo or item.foto.album.fotografo.email
             except AttributeError:
                 nome_fotografo = "Desconhecido"
             
+            # --- 🧮 MATEMÁTICA PROPORCIONAL DE DESCONTOS (O CORAÇÃO DO SEU CAIXA) ---
+            valor_real_item = 0.0
+            if item.preco and item.pedido.valor_total:
+                subtotal_cheio = sum(i.preco for i in item.pedido.itens.all() if i.preco)
+                if subtotal_cheio > 0:
+                    fator_desconto = float(item.pedido.valor_total) / float(subtotal_cheio)
+                    valor_real_item = float(item.preco) * fator_desconto
+                else:
+                    valor_real_item = float(item.preco)
+            
+            comissao = valor_real_item * 0.95
+
+            # Só somamos para pagar ao fotógrafo se a venda estiver PAGA e AINDA NÃO PAGA ao fotógrafo
+            if item.pedido.status == Pedido.StatusPedido.PAGO and not item.pago_ao_fotografo:
+                total_vendas_pendentes_reais += valor_real_item
+
             data_local = timezone.localtime(item.pedido.criado_em)
             
             dados_tabela.append({
@@ -549,14 +580,16 @@ class AdminVendasJSONView(APIView):
                 "data": data_local.strftime("%d/%m/%Y %H:%M"),
                 "forma_pgto": getattr(item.pedido, 'metodo_pagamento', 'MERCADO_PAGO'),
                 "status": item.pedido.status,
-                "pago_ao_fotografo": item.pago_ao_fotografo, # <--- Enviamos a etiqueta nova!
-                "valor_venda": float(item.preco) if item.preco else 0,
-                "comissao": (float(item.preco) * 0.95) if item.preco else 0
+                "pago_ao_fotografo": item.pago_ao_fotografo,
+                "valor_venda": valor_real_item,  # 🎯 Agora o React mostra o valor descontado!
+                "comissao": comissao             # 🎯 E a comissão é 95% do valor descontado!
             })
+
+        total_pagar_pendente = total_vendas_pendentes_reais * 0.95
 
         return Response({
             "resumo": {
-                "total_vendas": total_vendas_pendentes,
+                "total_vendas": total_vendas_pendentes_reais,
                 "total_pagar": total_pagar_pendente
             },
             "resultados": dados_tabela,
@@ -622,8 +655,30 @@ class AdminHistoricoPagamentosView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        historico = HistoricoPagamentoFotografo.objects.all().order_by('-data_pagamento')
+        # 1. Capturamos os filtros que o React enviou na URL
+        data_inicio = request.GET.get('data_inicio')
+        data_fim = request.GET.get('data_fim')
+        fotografo_id = request.GET.get('fotografo_id')
+
+        # 2. Iniciamos a busca (O select_related('fotografo') é um bônus de performance 
+        # que impede o Django de fazer 1 consulta extra por cada nome de fotógrafo!)
+        historico = HistoricoPagamentoFotografo.objects.select_related('fotografo').all().order_by('-data_pagamento')
         
+        # 3. Aplicamos a filtragem mágica
+        if fotografo_id:
+            historico = historico.filter(fotografo_id=fotografo_id)
+            
+        if data_inicio and data_fim:
+            # Se tiver as duas datas, procura entre elas
+            historico = historico.filter(data_pagamento__date__range=[data_inicio, data_fim])
+        elif data_inicio:
+            # Apenas maior ou igual a data de início
+            historico = historico.filter(data_pagamento__date__gte=data_inicio)
+        elif data_fim:
+            # Apenas menor ou igual a data de fim
+            historico = historico.filter(data_pagamento__date__lte=data_fim)
+
+        # 4. O resto do seu código continua exatamente igual
         dados = []
         for rec in historico:
             data_local = timezone.localtime(rec.data_pagamento)
@@ -645,15 +700,18 @@ class FotografoVendasJSONView(APIView):
         fotografo = request.user
         data_inicio = request.GET.get('data_inicio')
         data_fim = request.GET.get('data_fim')
-        status_repasse = request.GET.get('status_repasse') # Pode ser 'PENDENTE' ou 'PAGO'
+        status_repasse = request.GET.get('status_repasse')
 
-        # 1. Pega APENAS as vendas deste fotógrafo onde o cliente JÁ PAGOU
-        vendas = ItemPedido.objects.filter(
+        vendas = ItemPedido.objects.select_related(
+            'pedido'
+        ).prefetch_related(
+            'pedido__itens'
+        ).filter(
             foto__album__fotografo=fotografo,
             pedido__status=Pedido.StatusPedido.PAGO
         ).order_by('-pedido__criado_em')
 
-        # 2. Aplica os filtros de data e status
+        # 2. Aplica os filtros para a TABELA
         if data_inicio:
             vendas = vendas.filter(pedido__criado_em__date__gte=parse_date(data_inicio))
         if data_fim:
@@ -663,40 +721,59 @@ class FotografoVendasJSONView(APIView):
         elif status_repasse == 'PENDENTE':
             vendas = vendas.filter(pago_ao_fotografo=False)
 
-        # 3. Calcula os Saldos Fixos (O que ele tem a receber hoje e o que já recebeu na vida)
-        saldo_pendente_db = ItemPedido.objects.filter(
+        # 🚀 A MÁGICA DE VELOCIDADE PARA O FOTÓGRAFO:
+        # Se ele não usou nenhum filtro, mostramos apenas as 30 últimas vendas para a tela abrir num piscar de olhos!
+        if not (data_inicio or data_fim or status_repasse):
+            vendas = vendas[:30]
+
+        # 3. Calcula o SALDO PENDENTE REAL (O resumo no topo ignora o limite de 30, ele calcula tudo!)
+        itens_pendentes_geral = ItemPedido.objects.select_related('pedido').prefetch_related('pedido__itens').filter(
             foto__album__fotografo=fotografo,
             pedido__status=Pedido.StatusPedido.PAGO,
             pago_ao_fotografo=False
-        ).aggregate(total=Sum('preco'))['total'] or 0
+        )
+        
+        saldo_pendente_real = 0.0
+        for item in itens_pendentes_geral:
+            valor_real_aux = 0.0
+            if item.preco and item.pedido.valor_total:
+                subtotal = sum(i.preco for i in item.pedido.itens.all() if i.preco)
+                if subtotal > 0:
+                    valor_real_aux = float(item.preco) * (float(item.pedido.valor_total) / float(subtotal))
+                else:
+                    valor_real_aux = float(item.preco)
+            saldo_pendente_real += valor_real_aux * 0.95
 
         total_ja_recebido_db = HistoricoPagamentoFotografo.objects.filter(
             fotografo=fotografo
         ).aggregate(total=Sum('valor_pago'))['total'] or 0
 
         # 4. Monta a tabela
-        # 4. Monta a tabela
         dados_tabela = []
         for item in vendas:
             data_local = timezone.localtime(item.pedido.criado_em)
             
-            # --- TENTATIVA SEGURA DE BUSCAR O NOME ---
             nome_cliente = "Desconhecido"
-            
-            # 1. Verifica se o campo se chama 'cliente' (o mais comum)
             if hasattr(item.pedido, 'cliente') and item.pedido.cliente:
                 nome_cliente = item.pedido.cliente.nome_completo or item.pedido.cliente.email
-            
-            # 2. Verifica se o campo se chama 'user'
             elif hasattr(item.pedido, 'user') and item.pedido.user:
                 nome_cliente = item.pedido.user.nome_completo or item.pedido.user.email
-            
-            # 3. Se for apenas texto salvo no pedido (ex: compras sem login)
             elif hasattr(item.pedido, 'cliente_nome') and item.pedido.cliente_nome:
                 nome_cliente = item.pedido.cliente_nome
             elif hasattr(item.pedido, 'cliente_email') and item.pedido.cliente_email:
                 nome_cliente = item.pedido.cliente_email
             
+            valor_real_item = 0.0
+            if item.preco and item.pedido.valor_total:
+                subtotal_cheio = sum(i.preco for i in item.pedido.itens.all() if i.preco)
+                if subtotal_cheio > 0:
+                    fator_desconto = float(item.pedido.valor_total) / float(subtotal_cheio)
+                    valor_real_item = float(item.preco) * fator_desconto
+                else:
+                    valor_real_item = float(item.preco)
+            
+            comissao = valor_real_item * 0.95
+
             dados_tabela.append({
                 "id": item.id,
                 "pedido_id": item.pedido.id,
@@ -704,13 +781,13 @@ class FotografoVendasJSONView(APIView):
                 "cliente": nome_cliente,
                 "data": data_local.strftime("%d/%m/%Y %H:%M"),
                 "pago_ao_fotografo": item.pago_ao_fotografo,
-                "valor_venda": float(item.preco) if item.preco else 0,
-                "comissao": (float(item.preco) * 0.95) if item.preco else 0
+                "valor_venda": valor_real_item,  
+                "comissao": comissao             
             })
 
         return Response({
             "resumo": {
-                "saldo_pendente": float(saldo_pendente_db) * 0.95,
+                "saldo_pendente": saldo_pendente_real,
                 "total_ja_recebido": float(total_ja_recebido_db)
             },
             "resultados": dados_tabela

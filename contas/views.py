@@ -13,6 +13,7 @@ from django.utils.encoding import force_bytes, force_str
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
+from django.db.models import Q
 
 from rest_framework import generics, status, viewsets, authentication
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -66,13 +67,44 @@ class UserRegistrationView(generics.CreateAPIView):
 
 # --- ViewSet de Admin ---
 class UserAdminViewSet(viewsets.ModelViewSet):
-    queryset = Usuario.objects.all().order_by('id')
+    # Removi o queryset padrão daqui, pois agora vamos gerá-lo dinamicamente na função abaixo!
     serializer_class = UserAdminSerializer
     permission_classes = [IsAdminUser]
     
+    # Você pode manter estes filtros se quiser, mas a nossa lógica manual abaixo já faz esse trabalho
     filter_backends = [SearchFilter]
     search_fields = ['nome_completo', 'email']
 
+    # 🚀 AQUI ESTÁ A MÁGICA DA OTIMIZAÇÃO:
+    def get_queryset(self):
+        # 1. Pega todos os utilizadores, do mais NOVO (-id) para o mais ANTIGO
+        queryset = Usuario.objects.all().order_by('-id')
+
+        # 2. Captura os filtros que o React enviou na URL
+        q = self.request.query_params.get('q')
+        papel = self.request.query_params.get('papel')
+        status_param = self.request.query_params.get('status')
+
+        # 3. Aplica os filtros no banco de dados
+        if q:
+            queryset = queryset.filter(Q(nome_completo__icontains=q) | Q(email__icontains=q))
+        
+        if papel:
+            queryset = queryset.filter(papel=papel)
+            
+        if status_param == 'ativo':
+            queryset = queryset.filter(is_active=True)
+        elif status_param == 'bloqueado':
+            queryset = queryset.filter(is_active=False)
+
+        # 4. ⚡ O MODO RÁPIDO: Se não tem filtros, corta a lista para os 50 mais recentes!
+        if not (q or papel or status_param):
+            # O [:50] no Django faz o SQL buscar apenas 50 itens, não importa se tiver 1 milhão no banco!
+            queryset = queryset[:50]
+
+        return queryset
+
+    # --- As suas ações personalizadas continuam exatamente iguais! ---
     @action(detail=True, methods=['post'], parser_classes=[MultiPartParser, FormParser])
     def upload_foto_perfil(self, request, pk=None):
         user = self.get_object()
