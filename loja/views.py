@@ -926,6 +926,15 @@ class FotografoVendasJSONView(APIView):
             
             comissao = valor_real_item * 0.95
 
+            foto_url = ""
+            if item.foto and item.foto.imagem:
+                try:
+                    foto_url = item.foto.imagem.url
+                except Exception:
+                    pass # Se der erro no S3, a foto fica em branco mas não trava o sistema
+            
+            album_nome = item.foto.album.titulo if hasattr(item.foto, 'album') and item.foto.album else "Álbum Desconhecido"
+
             dados_tabela.append({
                 "id": item.id,
                 "pedido_id": item.pedido.id,
@@ -934,7 +943,9 @@ class FotografoVendasJSONView(APIView):
                 "data": data_local.strftime("%d/%m/%Y %H:%M"),
                 "pago_ao_fotografo": item.pago_ao_fotografo,
                 "valor_venda": valor_real_item,  
-                "comissao": comissao             
+                "comissao": comissao,
+                "foto_url": foto_url,
+                "album_nome": album_nome             
             })
 
         return Response({
