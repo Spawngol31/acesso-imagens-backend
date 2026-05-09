@@ -98,9 +98,8 @@ class UserAdminViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(is_active=False)
 
         # 4. ⚡ O MODO RÁPIDO: Se não tem filtros, corta a lista para os 50 mais recentes!
-        if not (q or papel or status_param):
-            # O [:50] no Django faz o SQL buscar apenas 50 itens, não importa se tiver 1 milhão no banco!
-            queryset = queryset[:50]
+        if self.action == 'list' and not (q or papel or status_param):
+            queryset = queryset[:30]
 
         return queryset
 

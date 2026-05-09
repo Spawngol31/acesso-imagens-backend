@@ -1,39 +1,44 @@
 # loja/views.py
 
+# 1. Bibliotecas Padrão do Python
 import csv
-import io, os, boto3, mercadopago, zipfile
-import json # Import necessário para logs
-
-from botocore.exceptions import ClientError
+import io
+import json
+import os
+import zipfile
+from datetime import timedelta
 from decimal import Decimal
 
-from django.core.mail import send_mail
-from django.http import HttpResponse
+# 2. Bibliotecas de Terceiros
+import boto3
+import mercadopago
+from botocore.exceptions import ClientError
+
+# 3. Django
 from django.conf import settings
+from django.core.mail import send_mail
+from django.db import transaction
+from django.db.models import Sum, Count, Q, Prefetch # 🚀 Agrupamos os do models aqui!
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.utils.dateparse import parse_date
-from django.db.models import Sum, Count
-from django.db import transaction
-from django.db.models import Q
-from django.db.models import Prefetch
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
+# 4. Django Rest Framework (DRF)
 from rest_framework import status, viewsets, generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
+# NOTA: O IsAdminUser do DRF foi removido daqui para não colidir com o seu personalizado abaixo
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-# --- IMPORTS DE SEGURANÇA (CORREÇÃO) ---
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
-
-from contas.permissions import IsCliente, IsFotografoOrAdmin, IsAdminUser
-from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada, HistoricoPagamentoFotografo
-from galeria.models import Foto
+# 5. Imports Locais (O seu projeto)
 from contas.models import Usuario
-from .serializers import (
-    CarrinhoSerializer, PedidoSerializer, VendaFotografoSerializer, CupomSerializer
-)
+from contas.permissions import IsCliente, IsFotografoOrAdmin, IsAdminUser
+from galeria.models import Foto
+from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada, HistoricoPagamentoFotografo
+from .serializers import CarrinhoSerializer, PedidoSerializer, VendaFotografoSerializer, CupomSerializer
 
 # --- VIEWS DO FLUXO DE COMPRA DO CLIENTE ---
 
@@ -562,19 +567,69 @@ class AdminStatsView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
 
     def get(self, request):
-        pedidos_pagos = Pedido.objects.filter(status=Pedido.StatusPedido.PAGO)
-        total_revenue = pedidos_pagos.aggregate(total=Sum('valor_total'))['total'] or 0
-        total_sales_count = ItemPedido.objects.filter(pedido__status=Pedido.StatusPedido.PAGO).count()
+        # 1. Lê o filtro de período (padrão 'mensal')
+        periodo = request.GET.get('periodo', 'mensal')
+        agora = timezone.now()
+        
+        # 2. Criamos a base de Pedidos Pagos
+        pedidos_base = Pedido.objects.filter(status=Pedido.StatusPedido.PAGO)
+        
+        # 3. Aplicamos o filtro de data na base
+        if periodo == 'diario':
+            pedidos_base = pedidos_base.filter(criado_em__date=agora.date())
+        elif periodo == 'semanal':
+            sete_dias_atras = agora - timedelta(days=7)
+            pedidos_base = pedidos_base.filter(criado_em__gte=sete_dias_atras)
+        elif periodo == 'mensal':
+            trinta_dias_atras = agora - timedelta(days=30)
+            pedidos_base = pedidos_base.filter(criado_em__gte=trinta_dias_atras)
+        elif periodo == 'anual':
+            um_ano_atras = agora - timedelta(days=365)
+            pedidos_base = pedidos_base.filter(criado_em__gte=um_ano_atras)
+        # Se for 'todos', não aplicamos filtro de data
+
+        # --- CÁLCULOS GERAIS (Baseados no Período Selecionado) ---
+        
+        # Faturamento total no período
+        total_revenue = pedidos_base.aggregate(total=Sum('valor_total'))['total'] or 0
+        
+        # Fotos vendidas no período (contamos os itens vinculados aos pedidos filtrados)
+        total_sales_count = ItemPedido.objects.filter(pedido__in=pedidos_base).count()
+        
+        # Estatísticas Globais (Normalmente não mudam com o filtro de tempo)
         total_users = Usuario.objects.count()
         total_photographers = Usuario.objects.filter(papel=Usuario.Papel.FOTOGRAFO).count()
-        top_fotografos = Usuario.objects.filter(papel=Usuario.Papel.FOTOGRAFO, albuns__fotos__itempedido__pedido__status=Pedido.StatusPedido.PAGO).annotate(total_vendido=Sum('albuns__fotos__itempedido__preco')).order_by('-total_vendido').values('id', 'nome_completo', 'email', 'total_vendido')[:5]
-        top_fotos = Foto.objects.filter(itempedido__pedido__status=Pedido.StatusPedido.PAGO).annotate(num_vendas=Count('itempedido')).order_by('-num_vendas').values('id', 'legenda', 'preco', 'album__fotografo__nome_completo', 'num_vendas')[:5]
-        
+
+        # --- RANKINGS (Também baseados no Período Selecionado) ---
+
+        # Top Fotógrafos: Filtramos as vendas pelo pedidos_base
+        top_fotografos = Usuario.objects.filter(
+            papel=Usuario.Papel.FOTOGRAFO,
+            albuns__fotos__itempedido__pedido__in=pedidos_base
+        ).annotate(
+            total_vendido=Sum('albuns__fotos__itempedido__preco')
+        ).order_by('-total_vendido').values('id', 'nome_completo', 'email', 'total_vendido')[:5]
+
+        # Top Fotos: Filtramos as vendas pelo pedidos_base
+        top_fotos = Foto.objects.filter(
+            itempedido__pedido__in=pedidos_base
+        ).annotate(
+            num_vendas=Count('itempedido')
+        ).order_by('-num_vendas').values(
+            'id', 'legenda', 'preco', 'album__fotografo__nome_completo', 'num_vendas'
+        )[:5]
+
         data = {
-            'geral': {'faturacao_total': total_revenue, 'fotos_vendidas_total': total_sales_count, 'utilizadores_total': total_users, 'fotografos_total': total_photographers},
+            'geral': {
+                'faturacao_total': total_revenue, 
+                'fotos_vendidas_total': total_sales_count, 
+                'utilizadores_total': total_users, 
+                'fotografos_total': total_photographers
+            },
             'top_fotografos': list(top_fotografos),
             'top_fotos': list(top_fotos),
         }
+        
         return Response(data)
     
 class ExportarPagamentosCSVView(APIView):
