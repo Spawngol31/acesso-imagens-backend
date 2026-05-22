@@ -154,7 +154,6 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None, metadados=None):
         if not parceiros.exists():
             return "Nenhum jornal parceiro ativo encontrado."
 
-        # Lê os bytes originais puros (Direto como saíram do Lightroom do fotógrafo)
         with foto.imagem.open('rb') as f:
             img_data = f.read()
 
@@ -171,7 +170,27 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None, metadados=None):
                     ftp.connect(parceiro.ftp_host, 21)
                     
                 ftp.login(user=parceiro.ftp_user, passwd=parceiro.ftp_password)
-                ftp.cwd(parceiro.ftp_pasta)
+                
+                # 🚀 INÍCIO DA LÓGICA DE PASTA INTELIGENTE
+                pasta_alvo = parceiro.ftp_pasta.strip()
+                if not pasta_alvo or pasta_alvo == '/':
+                    pasta_alvo = 'Acesso_Imagens' # Nome da pasta se o parceiro não definir nenhuma
+
+                try:
+                    ftp.cwd(pasta_alvo) # Tenta entrar na pasta
+                except ftplib.error_perm:
+                    # Se não existe, tenta criar
+                    try:
+                        ftp.mkd(pasta_alvo)
+                        ftp.cwd(pasta_alvo)
+                    except ftplib.error_perm:
+                        # FALLBACK SEGURANÇA: Se não tiver permissão para criar, usa a raiz
+                        try:
+                            ftp.cwd('/')
+                        except:
+                            pass # Fica no diretório padrão de login
+                # 🚀 FIM DA LÓGICA DE PASTA INTELIGENTE
+
                 ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_data))
                 ftp.quit()
                 resultados.append(f"Enviado Puro para: {parceiro.nome_jornal}")
@@ -200,7 +219,6 @@ def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
         )
         bucket_name = settings.AWS_STORAGE_BUCKET_NAME
 
-        # Baixa os bytes originais salvos na pasta temporária do S3
         s3_response = s3_client.get_object(Bucket=bucket_name, Key=temp_s3_key)
         img_data = s3_response['Body'].read()
 
@@ -221,14 +239,31 @@ def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
                     ftp.connect(parceiro.ftp_host, 21)
                     
                 ftp.login(user=parceiro.ftp_user, passwd=parceiro.ftp_password)
-                ftp.cwd(parceiro.ftp_pasta)
+                
+                # 🚀 INÍCIO DA LÓGICA DE PASTA INTELIGENTE (Cópia idêntica)
+                pasta_alvo = parceiro.ftp_pasta.strip()
+                if not pasta_alvo or pasta_alvo == '/':
+                    pasta_alvo = 'Acesso_Imagens'
+
+                try:
+                    ftp.cwd(pasta_alvo)
+                except ftplib.error_perm:
+                    try:
+                        ftp.mkd(pasta_alvo)
+                        ftp.cwd(pasta_alvo)
+                    except ftplib.error_perm:
+                        try:
+                            ftp.cwd('/')
+                        except:
+                            pass
+                # 🚀 FIM DA LÓGICA DE PASTA INTELIGENTE
+
                 ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_data))
                 ftp.quit()
                 resultados.append(f"Enviado Temp Puro para: {parceiro.nome_jornal}")
             except Exception as e:
                 resultados.append(f"Falha Temp para {parceiro.nome_jornal}: {str(e)}")
 
-        # Faz a limpeza regular do S3 temporário
         s3_client.delete_object(Bucket=bucket_name, Key=temp_s3_key)
 
         return resultados
