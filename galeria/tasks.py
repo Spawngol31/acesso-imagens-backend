@@ -6,25 +6,20 @@ import ffmpeg
 import tempfile
 import shutil
 from io import BytesIO
-from PIL import Image, ImageOps
-from iptcinfo3 import IPTCInfo
-import logging
+from PIL import Image
 
 from celery import shared_task
 from django.core.files.storage import default_storage
 from django.conf import settings
 from django.core.files.base import ContentFile
-from .models import Foto, FaceIndexada, Video # 'Album' foi removido desta linha
+from .models import Foto, FaceIndexada, Video 
 from contas.models import JornalParceiro
 
-# Silenciar avisos desnecessários da biblioteca IPTC
-logging.getLogger('iptcinfo').setLevel(logging.ERROR)
-
+# ====================================================================
+# TAREFA DE PROCESSAMENTO BÁSICO (Redimensionar, Rekognition, Marca d'água)
+# ====================================================================
 @shared_task
 def processar_foto_task(foto_id):
-    """
-    Versão final e robusta da tarefa de processamento de fotos.
-    """
     try:
         foto = Foto.objects.get(id=foto_id)
         if not foto.imagem:
@@ -35,24 +30,18 @@ def processar_foto_task(foto_id):
         with foto.imagem.open('rb') as image_file:
             image_bytes = image_file.read()
         
-        # --- LÓGICA DE REDIMENSIONAMENTO PARA O REKOGNITION ---
         REKOGNITION_LIMIT = 5 * 1024 * 1024 # 5MB
         
         if len(image_bytes) > REKOGNITION_LIMIT:
-            print(f"--- [CELERY] Imagem > 5MB. Redimensionando para análise... ---")
             img = Image.open(BytesIO(image_bytes))
             img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
-            
             buffer_rekognition = BytesIO()
             img.save(buffer_rekognition, format='JPEG', quality=95)
             image_bytes_for_rekognition = buffer_rekognition.getvalue()
-            print(f"--- [CELERY] Imagem redimensionada para {len(image_bytes_for_rekognition)} bytes. ---")
         else:
             image_bytes_for_rekognition = image_bytes
 
-        # --- LÓGICA DE INDEXAÇÃO FACIAL ---
         if not foto.faces_indexadas.exists():
-            print(f"--- [CELERY] Iniciando indexação facial... ---")
             rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
             response = rekognition_client.index_faces(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
@@ -66,23 +55,15 @@ def processar_foto_task(foto_id):
                 novas_faces.append(FaceIndexada(foto=foto, rekognition_face_id=face_id))
             if novas_faces:
                 FaceIndexada.objects.bulk_create(novas_faces)
-                print(f"--- [CELERY] {len(novas_faces)} faces indexadas com sucesso para a Foto ID: {foto.id} ---")
 
-        # --- LÓGICA DE GERAÇÃO DE MINIATURA ---
         if not foto.miniatura_marca_dagua:
-            print(f"--- [CELERY] Gerando miniatura com marca d'água... ---")
-            
-            # PRIMEIRO WITH: Abre a imagem original e MANTÉM aberta
             with Image.open(BytesIO(image_bytes)).convert("RGBA") as original_image:
                 size = (600, 600)
                 original_image.thumbnail(size)
                 img_width, img_height = original_image.size
-
                 watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
                 
-                # SEGUNDO WITH (DENTRO DO PRIMEIRO): Abre a marca d'água
                 with Image.open(watermark_path).convert("RGBA") as watermark:
-                    
                     PROPORCAO_MARCA = 0.20
                     new_wm_width = int(img_width * PROPORCAO_MARCA)
                     wm_ratio = new_wm_width / watermark.size[0]
@@ -95,7 +76,6 @@ def processar_foto_task(foto_id):
                     alpha = alpha.point(lambda i: i * OPACIDADE)
                     watermark.putalpha(alpha)
 
-                    # Agora funciona, pois a 'original_image' ainda está aberta!
                     final_image = Image.new('RGBA', original_image.size, (0, 0, 0, 0))
                     final_image.paste(original_image, (0, 0))
                     
@@ -111,13 +91,11 @@ def processar_foto_task(foto_id):
                     
                     file_name = os.path.basename(foto.imagem.name)
                     foto.miniatura_marca_dagua.save(file_name, ContentFile(buffer.read()), save=True)
-                    print(f"--- [CELERY] Miniatura para a foto {foto.id} salva com sucesso! ---")
 
         print(f"--- [CELERY] Processamento completo para Foto ID: {foto.id} ---")
             
     except Exception as e:
-        print(f"!!!!!!!!!!!! [ERRO CELERY] Ocorreu um erro ao processar a foto ID {foto_id} !!!!!!!!!!!!")
-        print(f"ERRO: {e}")
+        print(f"--- [ERRO CELERY] Erro ao processar foto task: {e} ---")
 
 
 @shared_task
@@ -129,22 +107,16 @@ def gerar_miniatura_video_task(video_id):
         if not video.arquivo_video or video.miniatura:
             return
 
-        print(f"--- [CELERY] Iniciando geração de miniatura para Vídeo ID: {video.id} ---")
-
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_video_file, \
              tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as temp_thumb_file:
             temp_video_path = temp_video_file.name
             temp_thumb_path = temp_thumb_file.name
         
-        print(f"--- [CELERY] Baixando vídeo do S3 para um ficheiro temporário... ---")
         with video.arquivo_video.open('rb') as s3_video_file:
             with open(temp_video_path, 'wb') as local_video_file:
                 local_video_file.write(s3_video_file.read())
 
-        print(f"--- [CELERY] Extraindo frame com FFmpeg do ficheiro local... ---")
-        
         ffmpeg_cmd = shutil.which('ffmpeg') or 'ffmpeg'
-
         (
             ffmpeg
             .input(temp_video_path, ss=1)
@@ -156,80 +128,42 @@ def gerar_miniatura_video_task(video_id):
         with open(temp_thumb_path, 'rb') as thumb_f:
             file_name = os.path.basename(video.arquivo_video.name).split('.')[0] + '.jpg'
             video.miniatura.save(file_name, ContentFile(thumb_f.read()), save=True)
-        
-        print(f"--- [CELERY] Miniatura para o Vídeo {video.id} salva com sucesso! ---")
 
     except Exception as e:
-        print(f"!!!!!!!!!!!! [ERRO CELERY] Ocorreu um erro ao processar o vídeo ID {video_id} !!!!!!!!!!!!")
-        if isinstance(e, ffmpeg.Error):
-            print('stdout:', e.stdout.decode('utf8'))
-            print('stderr:', e.stderr.decode('utf8'))
-        else:
-            print(f"ERRO: {e}")
+        print(f"--- [ERRO CELERY] Erro ao processar vídeo task: {e} ---")
     finally:
-        print(f"--- [CELERY] Limpando ficheiros temporários... ---")
         if temp_video_path and os.path.exists(temp_video_path):
             os.remove(temp_video_path)
         if temp_thumb_path and os.path.exists(temp_thumb_path):
             os.remove(temp_thumb_path)
 
+
+# ====================================================================
+# TAREFA: FTP PARA FOTOS SALVAS NO SITE (Envio Direto / Sem Alteração)
+# ====================================================================
 @shared_task
-def distribuir_foto_para_ftps(foto_id, jornais_ids=None):
+def distribuir_foto_para_ftps(foto_id, jornais_ids=None, metadados=None):
     try:
-        foto = Foto.objects.select_related('album', 'album__fotografo').get(id=foto_id)
+        foto = Foto.objects.select_related('album').get(id=foto_id)
         
-        # Filtra os jornais. Se a view enviou os IDs, pegamos só eles. 
-        # Se não enviou, pegamos todos os ativos.
         if jornais_ids:
             parceiros = JornalParceiro.objects.filter(id__in=jornais_ids, ativo=True)
         else:
             parceiros = JornalParceiro.objects.filter(ativo=True)
 
         if not parceiros.exists():
-            return "Nenhum jornal parceiro ativo ou correspondente aos IDs encontrados."
+            return "Nenhum jornal parceiro ativo encontrado."
 
-        # Lê os bytes da imagem
+        # Lê os bytes originais puros (Direto como saíram do Lightroom do fotógrafo)
         with foto.imagem.open('rb') as f:
             img_data = f.read()
 
-        # 2. Injetar Metadados IPTC em memória
-        img_io = BytesIO(img_data)
-        info = IPTCInfo(img_io, force=True)
-
-        # --- PROTEÇÃO CONTRA CAMPOS VAZIOS (NONE) ---
-        titulo_seguro = foto.album.titulo or 'Sem título'
-        legenda_segura = foto.legenda or 'Foto do evento'
-        local_seguro = foto.album.local or 'Local não informado'
-        data_segura = foto.album.data_evento.strftime('%d/%m/%Y') if foto.album.data_evento else ''
-        nome_fotografo = foto.album.fotografo.nome_completo if foto.album.fotografo else 'Equipe Acesso Imagens'
-
-        # Preenchimento dos metadados (AGORA USANDO AS VARIÁVEIS SEGURAS 👇)
-        info['headline'] = titulo_seguro[:255]
-        
-        # Só coloca a data e o local se eles existirem de fato
-        texto_legenda = legenda_segura
-        if data_segura or local_seguro:
-            texto_legenda += f" - Ocorrido em {data_segura} em {local_seguro}."
-            
-        info['caption/abstract'] = texto_legenda
-        info['by-line'] = nome_fotografo
-        info['source'] = 'Acesso Imagens'
-        info['credit'] = 'Acesso Imagens'
-        info['city'] = local_seguro
-
-        # Salvar os metadados de volta nos bytes
-        buffer_final = BytesIO()
-        info.save_as(buffer_final)
-        img_com_metadados = buffer_final.getvalue() 
-        
         nome_arquivo = os.path.basename(foto.imagem.name)
         resultados = []
 
-        # Faz o tour de entregas: passa em cada Jornal e entrega a foto
         for parceiro in parceiros:
             try:
                 ftp = ftplib.FTP()
-                
                 if ':' in parceiro.ftp_host:
                     host, porta = parceiro.ftp_host.split(':')
                     ftp.connect(host, int(porta))
@@ -238,12 +172,9 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None):
                     
                 ftp.login(user=parceiro.ftp_user, passwd=parceiro.ftp_password)
                 ftp.cwd(parceiro.ftp_pasta)
-                
-                # Guarda o arquivo no FTP do Jornal
-                ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_com_metadados))
+                ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_data))
                 ftp.quit()
-                
-                resultados.append(f"Enviado para: {parceiro.nome_jornal}")
+                resultados.append(f"Enviado Puro para: {parceiro.nome_jornal}")
             except Exception as e:
                 resultados.append(f"Falha ao enviar para {parceiro.nome_jornal}: {str(e)}")
 
@@ -253,3 +184,54 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None):
         return f"Erro: Foto {foto_id} não encontrada."
     except Exception as e:
         return f"Erro crítico na distribuição: {str(e)}"
+
+
+# ====================================================================
+# TAREFA: FTP PARA FOTOS TEMPORÁRIAS (Envio Direto / Sem Alteração)
+# ====================================================================
+@shared_task
+def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
+    try:
+        s3_client = boto3.client(
+            's3', 
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID, 
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
+            region_name=settings.AWS_S3_REGION_NAME
+        )
+        bucket_name = settings.AWS_STORAGE_BUCKET_NAME
+
+        # Baixa os bytes originais salvos na pasta temporária do S3
+        s3_response = s3_client.get_object(Bucket=bucket_name, Key=temp_s3_key)
+        img_data = s3_response['Body'].read()
+
+        parceiros = JornalParceiro.objects.filter(id__in=jornais_ids, ativo=True)
+        nome_arquivo = temp_s3_key.split('/')[-1]
+        if '_' in nome_arquivo:
+            nome_arquivo = nome_arquivo.split('_', 1)[1]
+
+        resultados = []
+
+        for parceiro in parceiros:
+            try:
+                ftp = ftplib.FTP()
+                if ':' in parceiro.ftp_host:
+                    host, porta = parceiro.ftp_host.split(':')
+                    ftp.connect(host, int(porta))
+                else:
+                    ftp.connect(parceiro.ftp_host, 21)
+                    
+                ftp.login(user=parceiro.ftp_user, passwd=parceiro.ftp_password)
+                ftp.cwd(parceiro.ftp_pasta)
+                ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_data))
+                ftp.quit()
+                resultados.append(f"Enviado Temp Puro para: {parceiro.nome_jornal}")
+            except Exception as e:
+                resultados.append(f"Falha Temp para {parceiro.nome_jornal}: {str(e)}")
+
+        # Faz a limpeza regular do S3 temporário
+        s3_client.delete_object(Bucket=bucket_name, Key=temp_s3_key)
+
+        return resultados
+
+    except Exception as e:
+        return f"Erro crítico na distribuição temporária: {str(e)}"

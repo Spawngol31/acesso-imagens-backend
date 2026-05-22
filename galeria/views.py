@@ -1,6 +1,5 @@
-# galeria/views.py
-
 import boto3
+import uuid # 🚀 NOVO IMPORT NECESSÁRIO
 from django.db.models import Q
 from django.core.files.base import ContentFile
 from django.conf import settings
@@ -10,20 +9,16 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.decorators import action
 from decimal import Decimal, InvalidOperation
-
-# --- NOVO IMPORT NECESSÁRIO PARA O PREVIEW ---
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-
 from PIL import Image, ImageOps
 from io import BytesIO
 
-from .tasks import distribuir_foto_para_ftps
+# Importa as tasks
+from .tasks import distribuir_foto_para_ftps, distribuir_foto_temporaria_ftp
 
-# Importa os modelos
+# Importa os modelos e serializers
 from .models import Album, Foto, Video, FaceIndexada
-
-# Importa os serializers
 from .serializers import (
     AlbumSerializer, 
     AlbumDetailSerializer, 
@@ -35,16 +30,15 @@ from .serializers import (
     VideoDashboardSerializer
 )
 
-# --- CORREÇÃO DA IMPORTAÇÃO ---
-# As permissões agora vêm do app 'contas'
+# Permissões do app contas
 from contas.permissions import IsFotografoOrAdmin, IsAdminUser
 from contas.models import Usuario
 
-
+# =========================================================
 # --- VIEWS PÚBLICAS (PARA OS CLIENTES) ---
+# =========================================================
 
 class AlbumListView(generics.ListAPIView):
-    # CORREÇÃO: select_related('fotografo') mata as dezenas de queries extras!
     queryset = Album.objects.filter(
         is_publico=True, 
         is_arquivado=False
@@ -54,20 +48,15 @@ class AlbumListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
 class AlbumDetailView(generics.RetrieveAPIView):
-    # queryset = Album.objects.filter(is_publico=True, is_arquivado=False)
     serializer_class = AlbumDetailSerializer
     permission_classes = [AllowAny]
     lookup_field = 'id'
 
     def get_queryset(self):
         user = self.request.user
-        
         if user.is_authenticated:
-            # O Admin tem o poder de ver tudo
             if user.papel == Usuario.Papel.ADMIN:
                 return Album.objects.all()
-            
-            # O fotógrafo pode ver os álbuns públicos E os seus próprios álbuns privados
             papeis_equipe = [
                 Usuario.Papel.FOTOGRAFO, Usuario.Papel.JORNALISTA, 
                 Usuario.Papel.ASSESSOR_IMPRENSA, Usuario.Papel.ASSESSOR_COMUNICACAO, 
@@ -75,8 +64,6 @@ class AlbumDetailView(generics.RetrieveAPIView):
             ]
             if user.papel in papeis_equipe:
                 return Album.objects.filter(Q(is_publico=True, is_arquivado=False) | Q(fotografo=user))
-                
-        # Visitantes ou Clientes normais só veem o que é público e não arquivado
         return Album.objects.filter(is_publico=True, is_arquivado=False)
 
     def get(self, request, *args, **kwargs):
@@ -88,122 +75,137 @@ class AlbumDetailView(generics.RetrieveAPIView):
 
 class StatusFilaProcessamentoView(APIView):
     permission_classes = [IsAuthenticated]
-
     def get(self, request):
-        # Procura todas as fotos que ainda não têm a miniatura da marca d'água salva
         fotos_na_fila = Foto.objects.filter(
             Q(miniatura_marca_dagua='') | Q(miniatura_marca_dagua__isnull=True)
         ).count()
-        
         return Response({'fotos_na_fila': fotos_na_fila})
 
 class BuscaFacialView(APIView):
     permission_classes = [AllowAny]
-
     def post(self, request):
         imagem_referencia = request.FILES.get('imagem_referencia')
-        if not imagem_referencia:
-            return Response({"error": "Nenhuma imagem de referência enviada."}, status=status.HTTP_400_BAD_REQUEST)
+        if not imagem_referencia: return Response({"error": "Nenhuma imagem."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             image_bytes = imagem_referencia.read()
-
-            # --- NOVA PROTEÇÃO: REDIMENSIONA SELFIES COM MAIS DE 5MB ---
             if len(image_bytes) > 5 * 1024 * 1024:
                 img = Image.open(BytesIO(image_bytes))
-                img = ImageOps.exif_transpose(img) # Garante que a selfie não fica deitada
+                img = ImageOps.exif_transpose(img)
                 img.thumbnail((1080, 1080), Image.Resampling.LANCZOS)
-                
                 buffer = BytesIO()
                 img.convert("RGB").save(buffer, format='JPEG', quality=85)
                 image_bytes = buffer.getvalue()
 
-                
             rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
             response = rekognition_client.search_faces_by_image(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
                 Image={'Bytes': imagem_referencia.read()},
-                MaxFaces=5,
-                FaceMatchThreshold=95
+                MaxFaces=5, FaceMatchThreshold=95
             )
             
             face_matches = response.get('FaceMatches', [])
-            if not face_matches:
-                return Response([], status=status.HTTP_200_OK)
+            if not face_matches: return Response([], status=status.HTTP_200_OK)
 
             matched_face_ids = [match['Face']['FaceId'] for match in face_matches]
+            fotos_encontradas_ids = FaceIndexada.objects.filter(rekognition_face_id__in=matched_face_ids).values_list('foto_id', flat=True).distinct()
+            fotos = Foto.objects.filter(id__in=fotos_encontradas_ids, is_arquivado=False, album__is_arquivado=False, album__is_publico=True)
             
-            fotos_encontradas_ids = FaceIndexada.objects.filter(
-                rekognition_face_id__in=matched_face_ids
-            ).values_list('foto_id', flat=True).distinct()
-            
-            fotos = Foto.objects.filter(
-                id__in=fotos_encontradas_ids,
-                is_arquivado=False,
-                album__is_arquivado=False,
-                album__is_publico=True
-            )
             serializer = FotoSerializer(fotos, many=True, context={'request': request})
             return Response(serializer.data)
-
         except Exception as e:
             print(f"Erro na busca facial: {e}")
             return Response({"error": "Ocorreu um erro durante a busca facial."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+# =========================================================================================
+# 🚀 LÓGICA DE UPLOAD REVOLUCIONADA (Site vs FTP)
+# =========================================================================================
 
-# --- VIEWS DO PAINEL DO FOTÓGRAFO (DASHBOARD) ---
-
-class FotoUploadView(generics.CreateAPIView):
-    queryset = Foto.objects.all()
-    serializer_class = FotoUploadSerializer
+class FotoUploadView(APIView):
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
-    def perform_create(self, serializer):
-        # 1. Salva a foto na Amazon S3 e no Banco de Dados
-        foto = serializer.save()
-
-        # 2. Recebe a lista de jornais que o frontend enviou
-        # Ex: "1,4,5" -> o request.data.get('jornais')
-        jornais_string = self.request.data.get('jornais')
-
-        # 3. Se o fotógrafo escolheu algum jornal, dispara o Celery!
+    def post(self, request, *args, **kwargs):
+        destino = request.data.get('destino_upload', 'site')
+        jornais_string = request.data.get('jornais')
+        imagem_file = request.FILES.get('imagem')
+        
+        # 1. Coleta os metadados IPTC enviados pelo React
+        metadados = {
+            'titulo': request.data.get('ftp_titulo', ''),
+            'data': request.data.get('ftp_data', ''),
+            'local': request.data.get('ftp_local', ''),
+            'legenda': request.data.get('ftp_legenda', ''),
+            'creditos': request.data.get('ftp_creditos', '')
+        }
+        
+        jornais_ids = []
         if jornais_string:
-            # Transforma a string "1,4,5" numa lista de números [1, 4, 5]
             jornais_ids = [int(id_str.strip()) for id_str in jornais_string.split(',') if id_str.strip().isdigit()]
-            
-            if jornais_ids:
-                print(f"--- Disparando FTP manual para os jornais {jornais_ids} ---")
-                distribuir_foto_para_ftps.delay(foto.id, jornais_ids)
+
+        # --- CENÁRIO 1: APENAS SITE ou AMBOS ---
+        # Se for para o site, temos de validar o preço e gravar no banco de dados.
+        if destino in ['site', 'ambos']:
+            serializer = FotoUploadSerializer(data=request.data, context={'request': request})
+            if serializer.is_valid():
+                foto = serializer.save()
+                
+                # Se for "ambos", dispara o FTP usando a foto salva
+                if destino == 'ambos' and jornais_ids:
+                    print(f"--- Disparando FTP (Ambos) para {jornais_ids} com metadados ---")
+                    # ⚠️ ATENÇÃO: Passamos os 'metadados' como terceiro argumento para o celery
+                    distribuir_foto_para_ftps.delay(foto.id, jornais_ids, metadados)
+                    
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # --- CENÁRIO 2: APENAS FTP (Não salva no Site/Banco de Dados) ---
+        elif destino == 'ftp':
+            if not jornais_ids or not imagem_file:
+                return Response({'error': 'Faltam jornais ou imagem para envio FTP.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            try:
+                # Upload direto para uma pasta temporária na AWS S3
+                s3_client = boto3.client(
+                    's3', 
+                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID, 
+                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
+                    region_name=settings.AWS_S3_REGION_NAME,
+                    config=boto3.session.Config(signature_version='s3v4')
+                )
+                
+                temp_key = f"tmp_ftp/{uuid.uuid4().hex}_{imagem_file.name}"
+                s3_client.upload_fileobj(imagem_file, settings.AWS_STORAGE_BUCKET_NAME, temp_key)
+                
+                print(f"--- Disparando FTP Temporário para {jornais_ids} com metadados ---")
+                
+                # 🚀 AGORA SIM! Enviamos a ordem real para o Celery fazer o trabalho em segundo plano:
+                distribuir_foto_temporaria_ftp.delay(temp_key, jornais_ids, metadados)
+
+                return Response({'status': 'Foto enviada direto para os jornais com sucesso!'}, status=status.HTTP_200_OK)
+                
+            except Exception as e:
+                print(f"Erro no upload temporário FTP: {e}")
+                return Response({'error': 'Erro ao processar arquivo FTP.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# =========================================================================================
 
 class VideoUploadDashboardView(generics.CreateAPIView):
     queryset = Video.objects.all()
     serializer_class = VideoUploadSerializer
-    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
 class AlbumViewSet(viewsets.ModelViewSet):
     serializer_class = AlbumDashboardSerializer
-    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def get_queryset(self):
-        # Admin vê todos os álbuns, Fotógrafo vê apenas os seus
-        if self.request.user.papel == 'ADMIN':
-            return Album.objects.all()
+        if self.request.user.papel == 'ADMIN': return Album.objects.all()
         return Album.objects.filter(fotografo=self.request.user)
 
     def perform_create(self, serializer):
-        # --- LÓGICA DE CRIAÇÃO CORRIGIDA ---
-        # Se for um fotógrafo a criar, associa-o automaticamente
         if self.request.user.papel == Usuario.Papel.FOTOGRAFO:
             serializer.save(fotografo=self.request.user)
-        
-        # Se for um Admin, ele DEVE enviar o 'fotografo_id' no pedido.
-        # Se ele não enviar, o 'fotografo' vem no serializer.save()
-        # e o modelo irá levantar um erro de 'NOT NULL', o que é correto.
-        # O frontend do Admin (se for construir) deve permitir selecionar um fotógrafo.
         elif self.request.user.papel == Usuario.Papel.ADMIN:
-            # A lógica de associar ao 'fotografo' enviado já é tratada pelo serializer.
-            # Se o 'fotografo' não for enviado, o serializer.save() irá falhar
-            # (o que é o comportamento de segurança esperado).
             serializer.save()
 
     @action(detail=True, methods=['post'])
@@ -224,18 +226,13 @@ class AlbumViewSet(viewsets.ModelViewSet):
     def bulk_update_photos(self, request, pk=None):
         album = self.get_object()
         new_price_str = request.data.get('preco')
-
-        if new_price_str is None:
-            return Response({'error': 'Preço não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
-        
+        if new_price_str is None: return Response({'error': 'Preço não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             new_price = Decimal(new_price_str)
-            if new_price < 0:
-                raise InvalidOperation
+            if new_price < 0: raise InvalidOperation
         except InvalidOperation:
              return Response({'error': 'Preço inválido.'}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Esta é a "magia": atualiza todas as fotos do álbum de uma vez
         count = album.fotos.all().update(preco=new_price)
         return Response({'status': f'{count} fotos atualizadas com sucesso para R$ {new_price:.2f}'})
 
@@ -243,18 +240,13 @@ class AlbumViewSet(viewsets.ModelViewSet):
     def bulk_update_videos(self, request, pk=None):
         album = self.get_object()
         new_price_str = request.data.get('preco')
-        
-        if new_price_str is None:
-            return Response({'error': 'Preço não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
-
+        if new_price_str is None: return Response({'error': 'Preço não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             new_price = Decimal(new_price_str)
-            if new_price < 0:
-                raise InvalidOperation
+            if new_price < 0: raise InvalidOperation
         except InvalidOperation:
              return Response({'error': 'Preço inválido.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Atualiza todos os vídeos do álbum de uma vez
         count = album.videos.all().update(preco=new_price)
         return Response({'status': f'{count} vídeos atualizados com sucesso para R$ {new_price:.2f}'})
     
@@ -262,35 +254,25 @@ class AlbumViewSet(viewsets.ModelViewSet):
     def definir_capa(self, request, pk=None):
         album = self.get_object()
         foto_id = request.data.get('foto_id')
-        
-        if not foto_id:
-            return Response({'error': 'ID da foto não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not foto_id: return Response({'error': 'ID da foto não fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
             
         foto = get_object_or_404(Foto, id=foto_id, album=album)
-
-        # --- MUDANÇA AQUI ---
-        # Verificamos se a miniatura do Celery já existe. 
-        # Se o fotógrafo clicar muito rápido antes do Celery terminar, o sistema avisa!
         if not foto.miniatura_marca_dagua:
-            return Response({'error': 'A foto ainda está sendo processada. Aguarde uns instantes e tente novamente.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'A foto ainda está sendo processada. Aguarde uns instantes.'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            # Lê a miniatura leve (já com marca d'água) e salva como a nova capa
             nome_arquivo = f"capa_album_{album.id}_foto_{foto.id}.jpg"
             album.capa.save(nome_arquivo, ContentFile(foto.miniatura_marca_dagua.read()), save=True)
-            
             return Response({'status': 'Capa do álbum atualizada com sucesso!'})
         except Exception as e:
-            print(f"Erro ao copiar miniatura para capa: {e}")
             return Response({'error': 'Erro ao processar a imagem para a capa.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class FotoViewSet(viewsets.ModelViewSet):
     serializer_class = FotoDashboardSerializer
-    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def get_queryset(self):
-        if self.request.user.papel == 'ADMIN':
-            return Foto.objects.all()
+        if self.request.user.papel == 'ADMIN': return Foto.objects.all()
         return Foto.objects.filter(album__fotografo=self.request.user)
     
     @action(detail=True, methods=['post'])
@@ -309,32 +291,23 @@ class FotoViewSet(viewsets.ModelViewSet):
 
 class VideoViewSet(viewsets.ModelViewSet):
     serializer_class = VideoDashboardSerializer
-    permission_classes = [IsAuthenticated, IsFotografoOrAdmin] # Correção: Usa IsFotografoOrAdmin
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def get_queryset(self):
-        if self.request.user.papel == 'ADMIN':
-            return Video.objects.all()
+        if self.request.user.papel == 'ADMIN': return Video.objects.all()
         return Video.objects.filter(album__fotografo=self.request.user)
     
-# =========================================================================
-# --- NOVA VIEW PARA COMPARTILHAMENTO NO WHATSAPP (Adicione no final) ---
-# =========================================================================
-
 def album_share_preview(request, pk):
     album = get_object_or_404(Album, pk=pk)
-    
     base_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173').rstrip('/')
     frontend_url = f"{base_url}/album/{album.id}"
     
     image_url = ""
     if album.capa:
         image_url = album.capa.url
-        if not image_url.startswith('http'):
-            image_url = request.build_absolute_uri(image_url)
-        if image_url.startswith('http://'):
-            image_url = image_url.replace('http://', 'https://')
-        if '?' in image_url:
-            image_url = image_url.split('?')[0]
+        if not image_url.startswith('http'): image_url = request.build_absolute_uri(image_url)
+        if image_url.startswith('http://'): image_url = image_url.replace('http://', 'https://')
+        if '?' in image_url: image_url = image_url.split('?')[0]
 
     html = f"""
     <!DOCTYPE html>
@@ -342,20 +315,15 @@ def album_share_preview(request, pk):
     <head>
         <meta charset="UTF-8">
         <title>{album.titulo}</title>
-        
         <meta property="og:type" content="website">
         <meta property="og:url" content="{frontend_url}">
         <meta property="og:title" content="{album.titulo} | Acesso Imagens">
         <meta property="og:description" content="{album.descricao or 'Confira as fotos exclusivas deste evento!'}">
-        
         <meta property="og:image" content="{image_url}">
         <meta property="og:image:secure_url" content="{image_url}">
         <meta property="og:image:type" content="image/jpeg">
         <link rel="image_src" href="{image_url}">
-
-        <script>
-            window.location.replace("{frontend_url}");
-        </script>
+        <script>window.location.replace("{frontend_url}");</script>
     </head>
     <body style="background-color: #f2e6f2; text-align: center; padding-top: 50px; font-family: sans-serif;">
         <p style="color: #6c0464;">Redirecionando você para o álbum...</p>

@@ -5,6 +5,7 @@ venv/
 
 # Segredos
 .env
+*.sql
 
 # Base de dados local
 db.sqlite3
@@ -15,3 +16,7 @@ __pycache__/
 
 # Logs e outros
 *.log
+
+# Arquivos de mídia e estáticos locais
+media/
+staticfiles/
