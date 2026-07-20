@@ -5,6 +5,7 @@ import boto3
 import ffmpeg
 import tempfile
 import shutil
+import subprocess
 from io import BytesIO
 from PIL import Image
 
@@ -137,6 +138,57 @@ def gerar_miniatura_video_task(video_id):
         if temp_thumb_path and os.path.exists(temp_thumb_path):
             os.remove(temp_thumb_path)
 
+@shared_task
+def processar_preview_video(video_id):
+    try:
+        video = Video.objects.get(id=video_id)
+        
+        caminho_original = video.arquivo_original.path
+        nome_arquivo = os.path.basename(caminho_original)
+        nome_preview = f"preview_{nome_arquivo}"
+        
+        # Onde o preview será salvo temporariamente
+        caminho_preview_temp = os.path.join(settings.MEDIA_ROOT, 'temp', nome_preview)
+        
+        # Caminho da sua logomarca (com fundo transparente PNG)
+        caminho_marca_dagua = os.path.join(settings.BASE_DIR, 'static', 'images', 'watermark.png')
+
+        # COMANDO FFMPEG
+        # 1. -i original e -i marca_dagua (inputs)
+        # 2. -t 10 (corta os primeiros 10 segundos)
+        # 3. filter_complex: redimensiona o vídeo (scale=854:480) e sobrepõe a logo (overlay) no canto inferior direito
+        # 4. -an (remove o áudio para o preview ficar bem leve)
+        # 5. -crf 28 (comprime bastante para carregar rápido no frontend)
+        comando = [
+            'ffmpeg', 
+            '-y', # Sobrescreve se já existir
+            '-i', caminho_original,
+            '-i', caminho_marca_dagua,
+            '-t', '10',
+            '-filter_complex', '[0:v]scale=854:480[bg];[bg][1:v]overlay=main_w-overlay_w-10:main_h-overlay_h-10',
+            '-an',
+            '-c:v', 'libx264',
+            '-crf', '28',
+            caminho_preview_temp
+        ]
+
+        # Executa o comando no servidor
+        subprocess.run(comando, check=True)
+
+        # Atualiza o banco de dados com o novo arquivo (aqui você salvaria no AWS S3 ou mídia local)
+        with open(caminho_preview_temp, 'rb') as f:
+            video.arquivo_preview.save(nome_preview, f, save=True)
+            
+        # Opcional: apagar o arquivo temporário gerado localmente
+        if os.path.exists(caminho_preview_temp):
+            os.remove(caminho_preview_temp)
+
+        return f"Preview do vídeo {video_id} gerado com sucesso!"
+
+    except Exception as e:
+        print(f"Erro ao processar vídeo {video_id}: {e}")
+        # Aqui você pode mudar o status do vídeo no banco para "Erro no processamento"
+        return False
 
 # ====================================================================
 # TAREFA: FTP PARA FOTOS SALVAS NO SITE (Envio Direto / Sem Alteração)

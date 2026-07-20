@@ -15,7 +15,7 @@ from PIL import Image, ImageOps
 from io import BytesIO
 
 # Importa as tasks
-from .tasks import distribuir_foto_para_ftps, distribuir_foto_temporaria_ftp
+from .tasks import distribuir_foto_para_ftps, distribuir_foto_temporaria_ftp, processar_preview_video
 
 # Importa os modelos e serializers
 from .models import Album, Foto, Video, FaceIndexada
@@ -83,11 +83,16 @@ class StatusFilaProcessamentoView(APIView):
 
 class BuscaFacialView(APIView):
     permission_classes = [AllowAny]
-    def post(self, request):
+    
+    def post(self, request, *args, **kwargs):
         imagem_referencia = request.FILES.get('imagem_referencia')
-        if not imagem_referencia: return Response({"error": "Nenhuma imagem."}, status=status.HTTP_400_BAD_REQUEST)
+        album_id = request.data.get('album_id')
+        
+        if not imagem_referencia: 
+            return Response({"error": "Nenhuma imagem."}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            # 1. LER E COMPACTAR A IMAGEM UMA SÓ VEZ
             image_bytes = imagem_referencia.read()
             if len(image_bytes) > 5 * 1024 * 1024:
                 img = Image.open(BytesIO(image_bytes))
@@ -95,28 +100,48 @@ class BuscaFacialView(APIView):
                 img.thumbnail((1080, 1080), Image.Resampling.LANCZOS)
                 buffer = BytesIO()
                 img.convert("RGB").save(buffer, format='JPEG', quality=85)
-                image_bytes = buffer.getvalue()
+                image_bytes = buffer.getvalue() # Salva a imagem processada
 
+            # 2. CHAMADA AO REKOGNITION (Usando os bytes processados)
             rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
             response = rekognition_client.search_faces_by_image(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
-                Image={'Bytes': imagem_referencia.read()},
+                Image={'Bytes': image_bytes}, # <--- CORREÇÃO AQUI
                 MaxFaces=5, FaceMatchThreshold=95
             )
             
             face_matches = response.get('FaceMatches', [])
-            if not face_matches: return Response([], status=status.HTTP_200_OK)
+            if not face_matches: 
+                return Response([], status=status.HTTP_200_OK)
 
+            # 3. PEGA OS IDS RETORNADOS E BUSCA NO BANCO
             matched_face_ids = [match['Face']['FaceId'] for match in face_matches]
             fotos_encontradas_ids = FaceIndexada.objects.filter(rekognition_face_id__in=matched_face_ids).values_list('foto_id', flat=True).distinct()
-            fotos = Foto.objects.filter(id__in=fotos_encontradas_ids, is_arquivado=False, album__is_arquivado=False, album__is_publico=True)
+            
+            # 4. AQUI APLICAMOS O FILTRO DE ÁLBUM!
+            if album_id:
+                # Se enviou album_id, filtra apenas as fotos desse álbum
+                fotos = Foto.objects.filter(
+                    id__in=fotos_encontradas_ids, 
+                    album_id=album_id, # <--- FILTRA AQUI
+                    is_arquivado=False
+                )
+            else:
+                # Se não enviou (Busca Global), filtra no site todo (álbuns públicos e não arquivados)
+                fotos = Foto.objects.filter(
+                    id__in=fotos_encontradas_ids, 
+                    is_arquivado=False, 
+                    album__is_arquivado=False, 
+                    album__is_publico=True
+                )
             
             serializer = FotoSerializer(fotos, many=True, context={'request': request})
             return Response(serializer.data)
+            
         except Exception as e:
             print(f"Erro na busca facial: {e}")
             return Response({"error": "Ocorreu um erro durante a busca facial."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        
 # =========================================================================================
 # 🚀 LÓGICA DE UPLOAD REVOLUCIONADA (Site vs FTP)
 # =========================================================================================
@@ -194,6 +219,13 @@ class VideoUploadDashboardView(generics.CreateAPIView):
     serializer_class = VideoUploadSerializer
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
+    def perform_create(self, serializer):
+        # 1. O Django salva o vídeo original no banco de dados primeiro
+        video = serializer.save()
+        
+        # 2. Envia a ordem para o Celery (FFmpeg) trabalhar em segundo plano usando o ID do vídeo!
+        processar_preview_video.delay(video.id)
+        
 class AlbumViewSet(viewsets.ModelViewSet):
     serializer_class = AlbumDashboardSerializer
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
