@@ -163,13 +163,27 @@ def processar_preview_video(video_id):
         # A linha corrigida:
         caminho_marca_dagua = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
 
+        filtro_ffmpeg = (
+            "[0:v]scale=-2:480[bg];"
+            "[1:v]scale=120:-1,format=rgba,colorchannelmixer=aa=0.2[wm];"
+            "[bg][wm]overlay=10:10[v1];"
+            "[v1][wm]overlay=(W-w)/2:10[v2];"
+            "[v2][wm]overlay=W-w-10:10[v3];"
+            "[v3][wm]overlay=10:(H-h)/2[v4];"
+            "[v4][wm]overlay=(W-w)/2:(H-h)/2[v5];"
+            "[v5][wm]overlay=W-w-10:(H-h)/2[v6];"
+            "[v6][wm]overlay=10:H-h-10[v7];"
+            "[v7][wm]overlay=(W-w)/2:H-h-10[v8];"
+            "[v8][wm]overlay=W-w-10:H-h-10"
+        )
+
         # 2. COMANDO FFMPEG
         comando = [
             'ffmpeg', '-y',
             '-i', caminho_original,
             '-i', caminho_marca_dagua,
             '-t', '10',
-            '-filter_complex', '[0:v]scale=854:480[bg];[bg][1:v]overlay=main_w-overlay_w-10:main_h-overlay_h-10',
+            '-filter_complex', filtro_ffmpeg,
             '-an',
             '-c:v', 'libx264',
             '-crf', '28',
