@@ -160,7 +160,8 @@ def processar_preview_video(video_id):
         caminho_preview_temp = os.path.join(settings.MEDIA_ROOT, 'temp', nome_preview)
         os.makedirs(os.path.dirname(caminho_preview_temp), exist_ok=True)
         
-        caminho_marca_dagua = os.path.join(settings.BASE_DIR, 'static', 'images', 'watermark.png')
+        # A linha corrigida:
+        caminho_marca_dagua = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
 
         # 2. COMANDO FFMPEG
         comando = [
