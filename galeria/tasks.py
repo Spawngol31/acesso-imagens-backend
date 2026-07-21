@@ -142,46 +142,66 @@ def gerar_miniatura_video_task(video_id):
 def processar_preview_video(video_id):
     caminho_original = None
     caminho_preview_temp = None
+    caminho_wm_tiled = None
+    
     try:
         video = Video.objects.get(id=video_id)
         
         # 1. Cria arquivos temporários para baixar da AWS S3
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_original:
             caminho_original = temp_original.name
-            
-            # Baixa o vídeo original do S3 para a Hetzner
             with video.arquivo_video.open('rb') as s3_video_file:
                 temp_original.write(s3_video_file.read())
 
         nome_arquivo = os.path.basename(video.arquivo_video.name)
         nome_preview = f"preview_{nome_arquivo}"
-        
-        # Onde o preview será salvo temporariamente
         caminho_preview_temp = os.path.join(settings.MEDIA_ROOT, 'temp', nome_preview)
         os.makedirs(os.path.dirname(caminho_preview_temp), exist_ok=True)
         
-        # A linha corrigida:
+        # =================================================================
+        # NOVA LÓGICA: Criar um "Lençol" gigante com a Marca d'Água (PIL)
+        # =================================================================
         caminho_marca_dagua = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
+        caminho_wm_tiled = os.path.join(settings.MEDIA_ROOT, 'temp', f'wm_tiled_{video_id}.png')
+        
+        with Image.open(caminho_marca_dagua).convert("RGBA") as wm:
+            # Reduz a marca original (pode ajustar esse valor '180' se quiser maior/menor)
+            nova_largura = 180
+            ratio = nova_largura / wm.size[0]
+            nova_altura = int(wm.size[1] * ratio)
+            wm = wm.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
+            
+            # Aplica opacidade de 20% (idêntico ao que você faz nas fotos)
+            alpha = wm.getchannel('A')
+            alpha = alpha.point(lambda i: i * 0.20)
+            wm.putalpha(alpha)
+            
+            # Cria um canvas gigante transparente de 2000x2000
+            canvas_size = 2000
+            canvas = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
+            
+            # Cola a marca d'água repetidas vezes nesse canvas formando a grade
+            padding = 120 # Espaço entre uma logo e outra
+            for y in range(0, canvas_size, nova_altura + padding):
+                for x in range(0, canvas_size, nova_largura + padding):
+                    canvas.paste(wm, (x, y), mask=wm)
+            
+            canvas.save(caminho_wm_tiled, 'PNG')
 
+        # =================================================================
+        # COMANDO FFMPEG (Agora super simples e à prova de falhas)
+        # =================================================================
+        # scale=-2:720 -> Mantém a proporção exata, mas com mais resolução para evitar o zoom
+        # overlay -> Joga o canvas gigante no meio do vídeo. O que sobrar para fora, é ignorado.
         filtro_ffmpeg = (
-            "[0:v]scale=-2:480[bg];"
-            "[1:v]scale=120:-1,format=rgba,colorchannelmixer=aa=0.2[wm];"
-            "[bg][wm]overlay=10:10[v1];"
-            "[v1][wm]overlay=(W-w)/2:10[v2];"
-            "[v2][wm]overlay=W-w-10:10[v3];"
-            "[v3][wm]overlay=10:(H-h)/2[v4];"
-            "[v4][wm]overlay=(W-w)/2:(H-h)/2[v5];"
-            "[v5][wm]overlay=W-w-10:(H-h)/2[v6];"
-            "[v6][wm]overlay=10:H-h-10[v7];"
-            "[v7][wm]overlay=(W-w)/2:H-h-10[v8];"
-            "[v8][wm]overlay=W-w-10:H-h-10"
+            "[0:v]scale=-2:720[bg];"
+            "[bg][1:v]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2"
         )
 
-        # 2. COMANDO FFMPEG
         comando = [
             'ffmpeg', '-y',
             '-i', caminho_original,
-            '-i', caminho_marca_dagua,
+            '-i', caminho_wm_tiled, # Usa o lençol gigante que criamos acima
             '-t', '10',
             '-filter_complex', filtro_ffmpeg,
             '-an',
@@ -192,7 +212,7 @@ def processar_preview_video(video_id):
 
         subprocess.run(comando, check=True)
 
-        # 3. Salva o novo arquivo de 10 segundos no campo que criamos no Model
+        # 3. Salva no banco de dados
         with open(caminho_preview_temp, 'rb') as f:
             video.arquivo_preview.save(nome_preview, ContentFile(f.read()), save=True)
 
@@ -203,11 +223,13 @@ def processar_preview_video(video_id):
         return False
         
     finally:
-        # 4. Apaga os vídeos temporários para não lotar o servidor Hetzner
+        # 4. Limpeza rigorosa para manter o seu servidor Hetzner rodando leve
         if caminho_original and os.path.exists(caminho_original):
             os.remove(caminho_original)
         if caminho_preview_temp and os.path.exists(caminho_preview_temp):
             os.remove(caminho_preview_temp)
+        if caminho_wm_tiled and os.path.exists(caminho_wm_tiled):
+            os.remove(caminho_wm_tiled)
 
 # ====================================================================
 # TAREFA: FTP PARA FOTOS SALVAS NO SITE (Envio Direto / Sem Alteração)
