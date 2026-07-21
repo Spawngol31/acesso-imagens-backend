@@ -166,14 +166,14 @@ def processar_preview_video(video_id):
         
         with Image.open(caminho_marca_dagua).convert("RGBA") as wm:
             # Reduz a marca original (pode ajustar esse valor '180' se quiser maior/menor)
-            nova_largura = 180
+            nova_largura = 120
             ratio = nova_largura / wm.size[0]
             nova_altura = int(wm.size[1] * ratio)
             wm = wm.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
             
             # Aplica opacidade de 20% (idêntico ao que você faz nas fotos)
             alpha = wm.getchannel('A')
-            alpha = alpha.point(lambda i: i * 0.20)
+            alpha = alpha.point(lambda i: i * 0.35)
             wm.putalpha(alpha)
             
             # Cria um canvas gigante transparente de 2000x2000
@@ -181,9 +181,11 @@ def processar_preview_video(video_id):
             canvas = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
             
             # Cola a marca d'água repetidas vezes nesse canvas formando a grade
-            padding = 120 # Espaço entre uma logo e outra
-            for y in range(0, canvas_size, nova_altura + padding):
-                for x in range(0, canvas_size, nova_largura + padding):
+            padding_x = 40
+            padding_y = 60
+
+            for y in range(0, canvas_size, nova_altura + padding_y):
+                for x in range(0, canvas_size, nova_largura + padding_x):
                     canvas.paste(wm, (x, y), mask=wm)
             
             canvas.save(caminho_wm_tiled, 'PNG')
@@ -193,10 +195,7 @@ def processar_preview_video(video_id):
         # =================================================================
         # scale=-2:720 -> Mantém a proporção exata, mas com mais resolução para evitar o zoom
         # overlay -> Joga o canvas gigante no meio do vídeo. O que sobrar para fora, é ignorado.
-        filtro_ffmpeg = (
-            "[0:v]scale=-2:720[bg];"
-            "[bg][1:v]overlay=(main_w-overlay_w)/2:(main_h-overlay_h)/2"
-        )
+        filtro_ffmpeg = "[0:v]scale=-2:720[bg];[bg][1:v]overlay=0:0"
 
         comando = [
             'ffmpeg', '-y',
