@@ -140,28 +140,31 @@ def gerar_miniatura_video_task(video_id):
 
 @shared_task
 def processar_preview_video(video_id):
+    caminho_original = None
+    caminho_preview_temp = None
     try:
         video = Video.objects.get(id=video_id)
         
-        caminho_original = video.arquivo_original.path
-        nome_arquivo = os.path.basename(caminho_original)
+        # 1. Cria arquivos temporários para baixar da AWS S3
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_original:
+            caminho_original = temp_original.name
+            
+            # Baixa o vídeo original do S3 para a Hetzner
+            with video.arquivo_video.open('rb') as s3_video_file:
+                temp_original.write(s3_video_file.read())
+
+        nome_arquivo = os.path.basename(video.arquivo_video.name)
         nome_preview = f"preview_{nome_arquivo}"
         
         # Onde o preview será salvo temporariamente
         caminho_preview_temp = os.path.join(settings.MEDIA_ROOT, 'temp', nome_preview)
+        os.makedirs(os.path.dirname(caminho_preview_temp), exist_ok=True)
         
-        # Caminho da sua logomarca (com fundo transparente PNG)
         caminho_marca_dagua = os.path.join(settings.BASE_DIR, 'static', 'images', 'watermark.png')
 
-        # COMANDO FFMPEG
-        # 1. -i original e -i marca_dagua (inputs)
-        # 2. -t 10 (corta os primeiros 10 segundos)
-        # 3. filter_complex: redimensiona o vídeo (scale=854:480) e sobrepõe a logo (overlay) no canto inferior direito
-        # 4. -an (remove o áudio para o preview ficar bem leve)
-        # 5. -crf 28 (comprime bastante para carregar rápido no frontend)
+        # 2. COMANDO FFMPEG
         comando = [
-            'ffmpeg', 
-            '-y', # Sobrescreve se já existir
+            'ffmpeg', '-y',
             '-i', caminho_original,
             '-i', caminho_marca_dagua,
             '-t', '10',
@@ -172,23 +175,24 @@ def processar_preview_video(video_id):
             caminho_preview_temp
         ]
 
-        # Executa o comando no servidor
         subprocess.run(comando, check=True)
 
-        # Atualiza o banco de dados com o novo arquivo (aqui você salvaria no AWS S3 ou mídia local)
+        # 3. Salva o novo arquivo de 10 segundos no campo que criamos no Model
         with open(caminho_preview_temp, 'rb') as f:
-            video.arquivo_preview.save(nome_preview, f, save=True)
-            
-        # Opcional: apagar o arquivo temporário gerado localmente
-        if os.path.exists(caminho_preview_temp):
-            os.remove(caminho_preview_temp)
+            video.arquivo_preview.save(nome_preview, ContentFile(f.read()), save=True)
 
         return f"Preview do vídeo {video_id} gerado com sucesso!"
 
     except Exception as e:
         print(f"Erro ao processar vídeo {video_id}: {e}")
-        # Aqui você pode mudar o status do vídeo no banco para "Erro no processamento"
         return False
+        
+    finally:
+        # 4. Apaga os vídeos temporários para não lotar o servidor Hetzner
+        if caminho_original and os.path.exists(caminho_original):
+            os.remove(caminho_original)
+        if caminho_preview_temp and os.path.exists(caminho_preview_temp):
+            os.remove(caminho_preview_temp)
 
 # ====================================================================
 # TAREFA: FTP PARA FOTOS SALVAS NO SITE (Envio Direto / Sem Alteração)

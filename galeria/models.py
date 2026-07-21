@@ -89,6 +89,7 @@ class Video(models.Model):
     titulo = models.CharField(max_length=255)
     arquivo_video = models.FileField(upload_to='videos/', storage=PrivateMediaStorage())
     miniatura = models.ImageField(upload_to='videos_thumbnails/', help_text="Thumbnail de pré-visualização para o vídeo.", blank=True, null=True, storage=PublicMediaStorage())
+    arquivo_preview = models.FileField(upload_to='videos_previews/', storage=PublicMediaStorage(), blank=True, null=True)
     preco = models.DecimalField(max_digits=10, decimal_places=2, default=25.00)
     data_upload = models.DateTimeField(auto_now_add=True)
 

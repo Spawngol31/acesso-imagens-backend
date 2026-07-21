@@ -6,7 +6,7 @@ from django.dispatch import receiver
 
 # --- 1. Importações Corrigidas e Consolidadas ---
 from .models import Foto, Video
-from .tasks import processar_foto_task, gerar_miniatura_video_task
+from .tasks import processar_foto_task, gerar_miniatura_video_task, processar_preview_video
 
 @receiver(post_save, sender=Foto)
 def processar_nova_foto_signal(sender, instance, created, **kwargs):
@@ -25,7 +25,11 @@ def processar_novo_video_signal(sender, instance, created, **kwargs):
     """
     Signal que é acionado após um Vídeo ser salvo.
     """
-    # --- 2. Lógica de Verificação Melhorada ---
     if created and instance.arquivo_video:
         print(f"--- Signal disparado para Vídeo ID: {instance.id}. Enviando para o Celery... ---")
+        
+        # 1. Gera a imagem estática (a thumbnail de capa)
         transaction.on_commit(lambda: gerar_miniatura_video_task.delay(instance.id))
+        
+        # 2. Gera o vídeo de preview de 10s com a marca d'água
+        transaction.on_commit(lambda: processar_preview_video.delay(instance.id))

@@ -220,11 +220,9 @@ class VideoUploadDashboardView(generics.CreateAPIView):
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def perform_create(self, serializer):
-        # 1. O Django salva o vídeo original no banco de dados primeiro
-        video = serializer.save()
-        
-        # 2. Envia a ordem para o Celery (FFmpeg) trabalhar em segundo plano usando o ID do vídeo!
-        processar_preview_video.delay(video.id)
+        # 1. O Django salva o vídeo original no banco de dados.
+        # Não precisamos mais chamar o .delay() aqui porque o signals.py já fará isso!
+        serializer.save()
         
 class AlbumViewSet(viewsets.ModelViewSet):
     serializer_class = AlbumDashboardSerializer
