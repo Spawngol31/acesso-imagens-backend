@@ -171,9 +171,9 @@ def processar_preview_video(video_id):
             nova_altura = int(wm.size[1] * ratio)
             wm = wm.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
             
-            # Aplica opacidade de 20% (idêntico ao que você faz nas fotos)
+            # Aplica opacidade de 50% (idêntico ao que você faz nas fotos)
             alpha = wm.getchannel('A')
-            alpha = alpha.point(lambda i: i * 0.35)
+            alpha = alpha.point(lambda i: i * 0.50)
             wm.putalpha(alpha)
             
             # Cria um canvas gigante transparente de 2000x2000
