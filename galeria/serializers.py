@@ -27,18 +27,26 @@ class FotoSerializer(serializers.ModelSerializer):
         #    deve ser capaz de lidar com uma URL nula (ex: mostrar um placeholder).
         return None
 
-# --- SERIALIZER DE VÍDEO (CORRETO) ---
+# --- SERIALIZER DE VÍDEO (CORRIGIDO) ---
 class VideoSerializer(serializers.ModelSerializer):
-    # A miniatura do vídeo também é pública
+    # A miniatura e o preview do vídeo são públicos
     miniatura_url = serializers.SerializerMethodField()
+    arquivo_preview_url = serializers.SerializerMethodField() # <-- ADICIONADO
 
     class Meta:
         model = Video
-        fields = ['id', 'titulo', 'preco', 'miniatura_url']
+        # <-- ADICIONADO 'arquivo_preview_url' na lista
+        fields = ['id', 'titulo', 'preco', 'miniatura_url', 'arquivo_preview_url'] 
 
     def get_miniatura_url(self, obj):
         if obj.miniatura and obj.miniatura.name:
             return obj.miniatura.url
+        return None
+
+    # <-- NOVA FUNÇÃO PARA ENVIAR O VÍDEO DE 10s
+    def get_arquivo_preview_url(self, obj):
+        if obj.arquivo_preview and obj.arquivo_preview.name:
+            return obj.arquivo_preview.url
         return None
 
 # --- SERIALIZER DE ÁLBUM (COM A LÓGICA CORRETA) ---
@@ -142,8 +150,5 @@ class FotoDashboardSerializer(serializers.ModelSerializer):
 class VideoDashboardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Video
-        fields = [
-            'id', 'album', 'titulo', 'preco', 
-            'arquivo_video', 'miniatura',
-        ]
+        fields = ['id', 'album', 'titulo', 'arquivo_video', 'arquivo_preview', 'miniatura', 'preco', 'data_upload']
         read_only_fields = ['id', 'album', 'arquivo_video', 'miniatura']
