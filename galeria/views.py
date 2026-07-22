@@ -1,5 +1,5 @@
 import boto3
-import uuid # 🚀 NOVO IMPORT NECESSÁRIO
+import uuid
 from django.db.models import Q
 from django.core.files.base import ContentFile
 from django.conf import settings
@@ -319,6 +319,38 @@ class FotoViewSet(viewsets.ModelViewSet):
         foto.save()
         return Response({'status': 'foto desarquivada'})
 
+    # =========================================================
+    # NOVA OPÇÃO: BAIXAR FOTO ORIGINAL
+    # =========================================================
+    @action(detail=True, methods=['get'])
+    def baixar_original(self, request, pk=None):
+        # O get_object() já garante que a foto pertence ao fotógrafo logado
+        foto = self.get_object() 
+        
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_S3_REGION_NAME
+        )
+        
+        caminho_s3 = str(foto.imagem)
+        nome_arquivo = caminho_s3.split('/')[-1]
+        
+        # Gera o link seguro direto da AWS que força o download
+        url = s3_client.generate_presigned_url(
+            ClientMethod='get_object',
+            Params={
+                'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+                'Key': caminho_s3,
+                'ResponseContentDisposition': f'attachment; filename="{nome_arquivo}"'
+            },
+            ExpiresIn=3600 # O link expira em 1 hora
+        )
+        
+        return Response({'url_download': url})
+    
+    
 class VideoViewSet(viewsets.ModelViewSet):
     serializer_class = VideoDashboardSerializer
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
