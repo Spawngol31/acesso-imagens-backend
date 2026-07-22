@@ -324,7 +324,6 @@ class FotoViewSet(viewsets.ModelViewSet):
     # =========================================================
     @action(detail=True, methods=['get'])
     def baixar_original(self, request, pk=None):
-        # O get_object() já garante que a foto pertence ao fotógrafo logado
         foto = self.get_object() 
         
         s3_client = boto3.client(
@@ -334,23 +333,31 @@ class FotoViewSet(viewsets.ModelViewSet):
             region_name=settings.AWS_S3_REGION_NAME
         )
         
-        caminho_s3 = str(foto.imagem)
-        nome_arquivo = caminho_s3.split('/')[-1]
+        # 1. Pega o nome do arquivo salvo no banco de dados
+        caminho_banco = foto.imagem.name
+        nome_arquivo = caminho_banco.split('/')[-1]
+        
+        # 2. Descobre se o seu S3 usa uma pasta raiz (ex: 'media') e ajusta a chave
+        aws_location = getattr(settings, 'AWS_LOCATION', '').strip('/')
+        if aws_location:
+            caminho_s3 = f"{aws_location}/{caminho_banco}".replace('//', '/')
+        else:
+            caminho_s3 = caminho_banco
         
         # Gera o link seguro direto da AWS que força o download
         url = s3_client.generate_presigned_url(
             ClientMethod='get_object',
             Params={
                 'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
-                'Key': caminho_s3,
+                'Key': caminho_s3, # Usa o caminho corrigido
                 'ResponseContentDisposition': f'attachment; filename="{nome_arquivo}"'
             },
-            ExpiresIn=3600 # O link expira em 1 hora
+            ExpiresIn=3600
         )
         
         return Response({'url_download': url})
     
-    
+
 class VideoViewSet(viewsets.ModelViewSet):
     serializer_class = VideoDashboardSerializer
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
