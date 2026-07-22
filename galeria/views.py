@@ -333,23 +333,20 @@ class FotoViewSet(viewsets.ModelViewSet):
             region_name=settings.AWS_S3_REGION_NAME
         )
         
-        # 1. Pega o nome do arquivo salvo no banco de dados
+        # 1. Pega o nome como está no banco de dados (ex: 'fotos/imagem.jpg')
         caminho_banco = foto.imagem.name
         nome_arquivo = caminho_banco.split('/')[-1]
         
-        # 2. Descobre se o seu S3 usa uma pasta raiz (ex: 'media') e ajusta a chave
-        aws_location = getattr(settings, 'AWS_LOCATION', '').strip('/')
-        if aws_location:
-            caminho_s3 = f"{aws_location}/{caminho_banco}".replace('//', '/')
-        else:
-            caminho_s3 = caminho_banco
+        # 2. Adiciona o prefixo exato que vimos na sua AWS S3
+        # Removemos barras duplicadas caso a string já venha com barra no início
+        caminho_s3 = f"media_private/{caminho_banco}".replace('//', '/')
         
         # Gera o link seguro direto da AWS que força o download
         url = s3_client.generate_presigned_url(
             ClientMethod='get_object',
             Params={
                 'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
-                'Key': caminho_s3, # Usa o caminho corrigido
+                'Key': caminho_s3, # Agora sim, apontando para s3://.../media_private/fotos/...
                 'ResponseContentDisposition': f'attachment; filename="{nome_arquivo}"'
             },
             ExpiresIn=3600
