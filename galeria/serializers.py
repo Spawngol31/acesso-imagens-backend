@@ -124,6 +124,20 @@ class VideoUploadSerializer(serializers.ModelSerializer):
         model = Video
         fields = ['album', 'titulo', 'preco', 'arquivo_video']
 
+    # --- CORREÇÃO 2: GERAR TÍTULO AUTOMÁTICO ---
+    def create(self, validated_data):
+        # Se o fotógrafo não preencher o título, o sistema cria um automático
+        if not validated_data.get('titulo'):
+            arquivo = validated_data.get('arquivo_video')
+            if arquivo:
+                # Pega o nome do arquivo original (ex: 'casamento_01.mp4' vira 'casamento_01')
+                nome_sem_extensao = arquivo.name.split('/')[-1].split('.')[0]
+                validated_data['titulo'] = nome_sem_extensao
+            else:
+                validated_data['titulo'] = "Vídeo sem título"
+                
+        return super().create(validated_data)
+
 class AlbumDashboardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Album
@@ -148,7 +162,21 @@ class FotoDashboardSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'album', 'imagem', 'miniatura_marca_dagua']
 
 class VideoDashboardSerializer(serializers.ModelSerializer):
+    # --- CORREÇÃO 1: ADICIONANDO AS URLs ABSOLUTAS NO DASHBOARD ---
+    miniatura_url = serializers.SerializerMethodField()
+    arquivo_preview_url = serializers.SerializerMethodField()
+
     class Meta:
         model = Video
-        fields = ['id', 'album', 'titulo', 'arquivo_video', 'arquivo_preview', 'miniatura', 'preco', 'data_upload']
-        read_only_fields = ['id', 'album', 'arquivo_video', 'miniatura']
+        # Adicionamos 'miniatura_url' e 'arquivo_preview_url' aqui
+        fields = ['id', 'album', 'titulo', 'arquivo_video', 'arquivo_preview_url', 'miniatura_url', 'preco', 'data_upload']
+        
+    def get_miniatura_url(self, obj):
+        if obj.miniatura and obj.miniatura.name:
+            return obj.miniatura.url
+        return None
+
+    def get_arquivo_preview_url(self, obj):
+        if obj.arquivo_preview and obj.arquivo_preview.name:
+            return obj.arquivo_preview.url
+        return None

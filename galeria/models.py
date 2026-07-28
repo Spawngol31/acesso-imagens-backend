@@ -86,7 +86,7 @@ class Foto(models.Model):
 
 class Video(models.Model):
     album = models.ForeignKey(Album, on_delete=models.CASCADE, related_name='videos')
-    titulo = models.CharField(max_length=255)
+    titulo = models.CharField(max_length=255, blank=True, null=True)
     arquivo_video = models.FileField(upload_to='videos/', storage=PrivateMediaStorage())
     miniatura = models.ImageField(upload_to='videos_thumbnails/', help_text="Thumbnail de pré-visualização para o vídeo.", blank=True, null=True, storage=PublicMediaStorage())
     arquivo_preview = models.FileField(upload_to='videos_previews/', storage=PublicMediaStorage(), blank=True, null=True)
