@@ -278,7 +278,7 @@ class MercadoPagoWebhookView(APIView):
                         pedido.save()
                         
                         for item_pedido in pedido.itens.all():
-                            FotoComprada.objects.create(cliente=pedido.cliente, foto=item_pedido.foto)
+                            FotoComprada.objects.get_or_create(cliente=pedido.cliente, foto=item_pedido.foto)
                         
                         ItemCarrinho.objects.filter(carrinho__cliente=pedido.cliente).delete()
                         print(f"SUCESSO: Pedido {pedido.id} finalizado e pago via {tipo_legivel}!")
