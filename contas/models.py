@@ -29,6 +29,13 @@ class Usuario(AbstractUser):
         default=Papel.CLIENTE
     )
 
+    # --- NOVO CAMPO: CONTROLE DA PÁGINA QUEM SOMOS ---
+    mostrar_no_quem_somos = models.BooleanField(
+        default=True, 
+        verbose_name="Mostrar no Quem Somos",
+        help_text="Desmarque para esconder fotógrafos independentes da página oficial da equipe."
+    )
+
     USERNAME_FIELD = 'email'
     
     # --- CORREÇÃO AQUI ---

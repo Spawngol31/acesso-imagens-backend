@@ -36,9 +36,9 @@ from rest_framework.views import APIView
 # 5. Imports Locais (O seu projeto)
 from contas.models import Usuario
 from contas.permissions import IsCliente, IsFotografoOrAdmin, IsAdminUser
-from galeria.models import Foto
-from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada, HistoricoPagamentoFotografo
-from .serializers import CarrinhoSerializer, PedidoSerializer, VendaFotografoSerializer, CupomSerializer
+from galeria.models import Foto, Video
+from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada, HistoricoPagamentoFotografo, PropostaCompra
+from .serializers import CarrinhoSerializer, PedidoSerializer, VendaFotografoSerializer, CupomSerializer, PropostaCompraSerializer
 
 # --- VIEWS DO FLUXO DE COMPRA DO CLIENTE ---
 
@@ -51,15 +51,32 @@ class CarrinhoView(APIView):
         return Response(serializer.data)
     
     def post(self, request):
-        carrinho, _ = Carrinho.objects.get_or_create(cliente=request.user)
         foto_id = request.data.get('foto_id')
-        foto = get_object_or_404(Foto, pk=foto_id)
-        # Verifica se o item já está no carrinho
-        if ItemCarrinho.objects.filter(carrinho=carrinho, foto=foto).exists():
-            return Response({"error": "Esta foto já está no seu carrinho."}, status=status.HTTP_400_BAD_REQUEST)
-        ItemCarrinho.objects.create(carrinho=carrinho, foto=foto)
-        serializer = CarrinhoSerializer(carrinho, context={'request': request})
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        video_id = request.data.get('video_id')
+
+        # 1. Busca ou cria o carrinho do usuário logado (Isso resolve o erro do "meu_carrinho")
+        carrinho_atual, created = Carrinho.objects.get_or_create(cliente=request.user)
+
+        # 2. Se o React enviou uma Foto:
+        if foto_id:
+            try:
+                foto = Foto.objects.get(id=foto_id)
+                ItemCarrinho.objects.get_or_create(carrinho=carrinho_atual, foto=foto)
+                return Response({'status': 'Foto adicionada ao carrinho com sucesso.'}, status=status.HTTP_201_CREATED)
+            except Foto.DoesNotExist:
+                return Response({'error': 'Foto não encontrada.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # 3. Se o React enviou um Vídeo:
+        elif video_id:
+            try:
+                video = Video.objects.get(id=video_id)
+                ItemCarrinho.objects.get_or_create(carrinho=carrinho_atual, video=video)
+                return Response({'status': 'Vídeo adicionado ao carrinho com sucesso.'}, status=status.HTTP_201_CREATED)
+            except Video.DoesNotExist:
+                return Response({'error': 'Vídeo não encontrado.'}, status=status.HTTP_404_NOT_FOUND)
+        
+        # 4. Se não enviou nada válido:
+        return Response({'error': 'Nenhum ID de foto ou vídeo foi fornecido.'}, status=status.HTTP_400_BAD_REQUEST)
     
     def delete(self, request):
         item_id = request.data.get('item_id')
@@ -899,7 +916,44 @@ class AdminHistoricoPagamentosView(APIView):
             })
         
         return Response(dados)
-    
+
+class FotografoCarrinhosAtivosView(APIView):
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
+
+    def get(self, request):
+        # 1. Busca todos os Itens de Carrinho onde:
+        # - O cliente não é nulo (ou seja, está logado)
+        # - A foto pertence a um álbum do fotógrafo atual
+        itens_carrinho = ItemCarrinho.objects.filter(
+            carrinho__cliente__isnull=False,
+            foto__album__fotografo=request.user
+        ).select_related('carrinho__cliente', 'foto', 'foto__album').order_by('-adicionado_em')
+
+        dados = []
+        for item in itens_carrinho:
+            cliente = item.carrinho.cliente
+            
+            # Tenta pegar a url da imagem de forma segura
+            foto_url = ""
+            if item.foto:
+                if hasattr(item.foto, 'miniatura_marca_dagua') and item.foto.miniatura_marca_dagua:
+                    foto_url = item.foto.miniatura_marca_dagua.url
+                elif hasattr(item.foto, 'imagem') and item.foto.imagem:
+                    foto_url = item.foto.imagem.url
+
+            dados.append({
+                "id": item.id,
+                "cliente_nome": cliente.nome_completo or "Cliente sem nome",
+                "cliente_email": cliente.email,
+                "foto_id": item.foto.id,
+                "album_titulo": item.foto.album.titulo,
+                "preco": float(item.foto.preco),
+                "foto_url": foto_url,
+                "data_adicao": timezone.localtime(item.adicionado_em).strftime("%d/%m/%Y %H:%M") if hasattr(item, 'adicionado_em') and item.adicionado_em else "Recente"
+            })
+
+        return Response(dados)
+
 class FotografoVendasJSONView(APIView):
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
@@ -1029,3 +1083,90 @@ class FotografoHistoricoPagamentosView(APIView):
                 "referencia_fim": rec.referencia_fim.strftime("%d/%m/%Y") if rec.referencia_fim else "-"
             })
         return Response(dados)
+
+# 1. Para o Cliente enviar a proposta
+class CriarPropostaView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if request.user.papel != 'CLIENTE':
+            return Response({"error": "Apenas clientes podem fazer propostas."}, status=status.HTTP_403_FORBIDDEN)
+        
+        serializer = PropostaCompraSerializer(data=request.data)
+        if serializer.is_valid():
+            # O sistema amarra a proposta automaticamente ao cliente logado
+            serializer.save(cliente=request.user)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# 2. Para o Fotógrafo ver as propostas que recebeu
+class FotografoPropostasView(APIView):
+    permission_classes = [IsAuthenticated] 
+
+    def get(self, request):
+        # Traz as propostas feitas apenas para os álbuns deste fotógrafo
+        propostas = PropostaCompra.objects.filter(album__fotografo=request.user).order_by('-criado_em')
+        serializer = PropostaCompraSerializer(propostas, many=True)
+        return Response(serializer.data)
+
+# 3. Para o Fotógrafo Aceitar ou Recusar
+# 3. Para o Fotógrafo Aceitar, Recusar ou enviar CONTRA-PROPOSTA
+class ResponderPropostaView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, acao):
+        try:
+            proposta = PropostaCompra.objects.get(pk=pk, album__fotografo=request.user)
+        except PropostaCompra.DoesNotExist:
+            return Response({"error": "Proposta não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        if proposta.status != 'PENDENTE':
+            return Response({"error": "Esta proposta já foi respondida ou está em negociação."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if acao == 'aceitar':
+            proposta.status = 'ACEITA'
+        elif acao == 'recusar':
+            proposta.status = 'RECUSADA'
+        elif acao == 'contraproposta':
+            valor = request.data.get('valor_contraproposta')
+            if not valor:
+                return Response({"error": "O valor da contra-proposta é obrigatório."}, status=status.HTTP_400_BAD_REQUEST)
+            proposta.valor_contraproposta = valor
+            proposta.status = 'CONTRAPROPOSTA'
+        else:
+            return Response({"error": "Ação inválida."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        proposta.save()
+        return Response({"status": f"Proposta atualizada para: {proposta.status}"})
+
+# 5. NOVO: Para o Cliente aceitar ou recusar a Contra-proposta do fotógrafo
+class ClienteResponderContrapropostaView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk, acao):
+        try:
+            proposta = PropostaCompra.objects.get(pk=pk, cliente=request.user, status='CONTRAPROPOSTA')
+        except PropostaCompra.DoesNotExist:
+            return Response({"error": "Contra-proposta não encontrada ou já respondida."}, status=status.HTTP_404_NOT_FOUND)
+
+        if acao == 'aceitar':
+            proposta.status = 'CONTRAPROPOSTA_ACEITA'
+        elif acao == 'recusar':
+            proposta.status = 'CONTRAPROPOSTA_RECUSADA'
+        else:
+            return Response({"error": "Ação inválida."}, status=status.HTTP_400_BAD_REQUEST)
+            
+        proposta.save()
+        return Response({"status": f"Contra-proposta {proposta.status}!"})
+
+# 4. Para o Cliente ver as SUAS próprias propostas
+class ClientePropostasView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if request.user.papel != 'CLIENTE':
+            return Response({"error": "Apenas clientes podem ver as suas propostas."}, status=status.HTTP_403_FORBIDDEN)
+            
+        propostas = PropostaCompra.objects.filter(cliente=request.user).order_by('-criado_em')
+        serializer = PropostaCompraSerializer(propostas, many=True)
+        return Response(serializer.data)

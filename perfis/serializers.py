@@ -4,21 +4,22 @@ from rest_framework import serializers
 from .models import PerfilCliente, PerfilFotografo
 
 # Serializer para a página pública "Quem Somos"
+# Serializer para a página pública "Quem Somos"
 class FotografoPublicoSerializer(serializers.ModelSerializer):
     nome_completo = serializers.CharField(source='usuario.nome_completo')
-    # --- CORREÇÃO 1: Mudar para SerializerMethodField ---
+    # --- NOVO: Puxa a configuração de visibilidade lá do Usuario ---
+    mostrar_no_quem_somos = serializers.BooleanField(source='usuario.mostrar_no_quem_somos', read_only=True)
     foto_perfil_url = serializers.SerializerMethodField()
 
     class Meta:
         model = PerfilFotografo
-        fields = ['id', 'nome_completo', 'foto_perfil_url', 'especialidade', 'rede_social']
+        # --- NOVO: Adicionado 'mostrar_no_quem_somos' na lista ---
+        fields = ['id', 'nome_completo', 'mostrar_no_quem_somos', 'foto_perfil_url', 'especialidade', 'rede_social']
 
-    # --- CORREÇÃO 1: Adicionar o método defensivo ---
     def get_foto_perfil_url(self, obj):
-        # Verifica se a foto existe antes de pedir a URL
         if obj.foto_perfil and obj.foto_perfil.name:
             return obj.foto_perfil.url
-        return None # Retorna nulo se não houver foto, em vez de crashar
+        return None
 
 # Serializer para o perfil do cliente no painel de admin
 class PerfilClienteSerializer(serializers.ModelSerializer):

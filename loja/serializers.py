@@ -2,8 +2,8 @@
 
 from decimal import Decimal
 from rest_framework import serializers
-from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom
-from galeria.models import Foto
+from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, PropostaCompra
+from galeria.models import Foto, Video
 # Não precisamos mais de importar o FotoSerializer da galeria
 
 # --- SERIALIZER DE CUPOM (CORRETO) ---
@@ -17,30 +17,49 @@ class CupomSerializer(serializers.ModelSerializer):
 # Ele usa o .url público da miniatura, que é muito mais rápido.
 class FotoParaLojaSerializer(serializers.ModelSerializer):
     imagem_url = serializers.SerializerMethodField()
+    album_titulo = serializers.CharField(source='album.titulo', read_only=True) # <-- NOVO
 
     class Meta:
         model = Foto
-        fields = ['id', 'legenda', 'preco', 'imagem_url', 'rotacao']
+        # Adicione 'album' e 'album_titulo' na lista
+        fields = ['id', 'legenda', 'preco', 'imagem_url', 'rotacao', 'album', 'album_titulo'] 
     
     def get_imagem_url(self, obj):
-        # Lógica defensiva para evitar o ValueError
         if obj.miniatura_marca_dagua and obj.miniatura_marca_dagua.name:
             return obj.miniatura_marca_dagua.url
-        # Fallback se a miniatura ainda não foi processada
         elif obj.imagem and obj.imagem.name:
-             # Retorna None porque a imagem original é privada e não deve ser exposta aqui
-             # O frontend deve mostrar um placeholder se a URL for nula
             return None
+        return None
+
+# --- NOVO SERIALIZER PARA VÍDEOS (OTIMIZADO) ---
+class VideoParaLojaSerializer(serializers.ModelSerializer):
+    miniatura_url = serializers.SerializerMethodField()
+    album_titulo = serializers.CharField(source='album.titulo', read_only=True)
+
+    class Meta:
+        model = Video
+        fields = ['id', 'titulo', 'preco', 'miniatura_url', 'album', 'album_titulo']
+    
+    def get_miniatura_url(self, obj):
+        if obj.miniatura and obj.miniatura.name:
+            return obj.miniatura.url
         return None
 
 # --- SERIALIZERS DE CARRINHO (CORRIGIDO) ---
 class ItemCarrinhoSerializer(serializers.ModelSerializer):
-    foto = FotoParaLojaSerializer(read_only=True) # <-- Usa o serializer leve
-    preco_item = serializers.DecimalField(source='foto.preco', max_digits=10, decimal_places=2, read_only=True)
+    foto = FotoParaLojaSerializer(read_only=True) 
+    video = VideoParaLojaSerializer(read_only=True) # <-- Adicionado
+    preco_item = serializers.SerializerMethodField()
 
     class Meta:
         model = ItemCarrinho
-        fields = ['id', 'foto', 'adicionado_em', 'preco_item']
+        fields = ['id', 'foto', 'video', 'adicionado_em', 'preco_item'] # <-- 'video' adicionado
+
+    def get_preco_item(self, obj):
+        # Retorna o preço dependendo do tipo de mídia que foi adicionada
+        if obj.foto: return obj.foto.preco
+        if obj.video: return obj.video.preco
+        return Decimal('0.00')
 
 class CarrinhoSerializer(serializers.ModelSerializer):
     itens = ItemCarrinhoSerializer(many=True, read_only=True)
@@ -54,27 +73,32 @@ class CarrinhoSerializer(serializers.ModelSerializer):
         fields = ['id', 'cliente', 'criado_em', 'itens', 'subtotal', 'desconto', 'total', 'cupom']
         
     def get_subtotal(self, obj):
-        # 1. Garante que começa com Decimal('0.00') e soma Decimal com Decimal
-        total = sum((item.foto.preco for item in obj.itens.all()), Decimal('0.00'))
-        # 2. Retorna arredondado
+        total = Decimal('0.00')
+        for item in obj.itens.all():
+            if item.foto:
+                total += item.foto.preco
+            elif item.video:
+                total += item.video.preco
         return round(total, 2)
 
     def get_desconto(self, obj):
         desconto_total = Decimal('0.00')
         
-        # 1. Primeiro verificamos os Descontos Progressivos dos Álbuns
-        # Precisamos agrupar as fotos do carrinho por álbum para saber quantas o cliente tem de cada
+        # 1. Agrupar mídias (Fotos ou Vídeos) por álbum
         fotos_por_album = {}
         for item in obj.itens.all():
-            album_id = item.foto.album.id
+            media = item.foto or item.video # Pega o que não estiver vazio
+            if not media: continue
+
+            album_id = media.album.id
             if album_id not in fotos_por_album:
                 fotos_por_album[album_id] = {
-                    'album': item.foto.album,
+                    'album': media.album,
                     'quantidade': 0,
                     'valor_soma': Decimal('0.00')
                 }
             fotos_por_album[album_id]['quantidade'] += 1
-            fotos_por_album[album_id]['valor_soma'] += item.foto.preco
+            fotos_por_album[album_id]['valor_soma'] += media.preco
 
         # Agora calculamos o desconto para cada álbum com base nas quantidades
         for dados in fotos_por_album.values():
@@ -82,9 +106,37 @@ class CarrinhoSerializer(serializers.ModelSerializer):
             qtd = dados['quantidade']
             valor_album = dados['valor_soma']
             
-            melhor_desconto_pct = Decimal('0.00')
+            # --- 🚀 MÁGICA DA PROPOSTA E CONTRAPROPOSTA ACEITA ---
+            proposta_aceita = PropostaCompra.objects.filter(
+                cliente=obj.cliente, 
+                album=album, 
+                status__in=['ACEITA', 'CONTRAPROPOSTA_ACEITA'] # Funciona para as duas!
+            ).order_by('-id').first() 
+
+            desconto_proposta = Decimal('0.00')
             
-            # Testa os 3 níveis (Pega sempre o maior desconto alcançado)
+            if proposta_aceita:
+                qtd_fotos_exigida = proposta_aceita.quantidade_fotos
+                qtd_videos_exigida = proposta_aceita.quantidade_videos
+                qtd_total_exigida = qtd_fotos_exigida + qtd_videos_exigida
+
+                # Verifica quantas fotos e vídeos o cliente colocou no carrinho deste álbum
+                qtd_fotos_carrinho = sum(1 for i in obj.itens.all() if i.foto and i.foto.album.id == album.id)
+                qtd_videos_carrinho = sum(1 for i in obj.itens.all() if i.video and i.video.album.id == album.id)
+                
+                # Só aplica o desconto se ele cumprir a quantidade prometida de FOTOS e de VÍDEOS
+                if qtd_fotos_carrinho >= qtd_fotos_exigida and qtd_videos_carrinho >= qtd_videos_exigida:
+                    preco_medio = valor_album / Decimal(qtd_fotos_carrinho + qtd_videos_carrinho)
+                    valor_normal_dos_itens_negociados = preco_medio * Decimal(qtd_total_exigida)
+                    
+                    # Se foi uma contra-proposta, usa o valor dela. Se não, usa o valor original do cliente.
+                    valor_acordado = proposta_aceita.valor_contraproposta if proposta_aceita.status == 'CONTRAPROPOSTA_ACEITA' else proposta_aceita.valor_oferecido
+                    
+                    if valor_normal_dos_itens_negociados > valor_acordado:
+                        desconto_proposta = valor_normal_dos_itens_negociados - valor_acordado
+            
+            # --- DESCONTOS PROGRESSIVOS ---
+            melhor_desconto_pct = Decimal('0.00')
             if album.qtd_desconto_1 > 0 and qtd >= album.qtd_desconto_1:
                 melhor_desconto_pct = max(melhor_desconto_pct, album.pct_desconto_1)
             if album.qtd_desconto_2 > 0 and qtd >= album.qtd_desconto_2:
@@ -92,20 +144,25 @@ class CarrinhoSerializer(serializers.ModelSerializer):
             if album.qtd_desconto_3 > 0 and qtd >= album.qtd_desconto_3:
                 melhor_desconto_pct = max(melhor_desconto_pct, album.pct_desconto_3)
             
+            desconto_progressivo = Decimal('0.00')
             if melhor_desconto_pct > 0:
-                desconto_album = valor_album * (melhor_desconto_pct / Decimal('100.0'))
-                desconto_total += desconto_album
+                desconto_progressivo = valor_album * (melhor_desconto_pct / Decimal('100.0'))
+
+            desconto_album = max(desconto_proposta, desconto_progressivo)
+            desconto_total += desconto_album
 
         # 2. Depois aplicamos a lógica do Cupom (se existir e for válido)
-        # O Cupom se soma aos descontos de volume, pois o cliente merece!
         if obj.cupom and obj.cupom.is_valido():
             fotografo_dono_cupom = obj.cupom.fotografo
             percentual_cupom = obj.cupom.desconto_percentual / Decimal('100.0')
 
             for item in obj.itens.all():
-                fotografo_da_foto = item.foto.album.fotografo
+                media = item.foto or item.video
+                if not media: continue
+
+                fotografo_da_foto = media.album.fotografo
                 if fotografo_da_foto == fotografo_dono_cupom:
-                    valor_desconto_item = item.foto.preco * percentual_cupom
+                    valor_desconto_item = media.preco * percentual_cupom
                     desconto_total += valor_desconto_item
                     
         return round(desconto_total, 2)
@@ -144,3 +201,17 @@ class VendaFotografoSerializer(serializers.ModelSerializer):
             'data_pedido',
             'cliente_email',
         ]
+
+class PropostaCompraSerializer(serializers.ModelSerializer):
+    cliente_nome = serializers.CharField(source='cliente.nome_completo', read_only=True)
+    cliente_email = serializers.CharField(source='cliente.email', read_only=True)
+    album_titulo = serializers.CharField(source='album.titulo', read_only=True)
+
+    class Meta:
+        model = PropostaCompra
+        fields = [
+            'id', 'cliente', 'cliente_nome', 'cliente_email', 
+            'album', 'album_titulo', 'quantidade_fotos', 'quantidade_videos', 
+            'valor_oferecido', 'valor_contraproposta', 'status', 'criado_em'
+        ]
+        read_only_fields = ['id', 'cliente', 'status', 'criado_em']

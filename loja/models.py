@@ -4,7 +4,7 @@ from django.db import models
 from django.utils import timezone
 from datetime import timedelta
 from contas.models import Usuario
-from galeria.models import Foto
+from galeria.models import Foto, Video
 
 class Carrinho(models.Model):
     cliente = models.OneToOneField(Usuario, on_delete=models.CASCADE, related_name='carrinho')
@@ -16,14 +16,17 @@ class Carrinho(models.Model):
 
 class ItemCarrinho(models.Model):
     carrinho = models.ForeignKey(Carrinho, on_delete=models.CASCADE, related_name='itens')
-    foto = models.ForeignKey(Foto, on_delete=models.CASCADE)
+    # Transformamos a foto em opcional (null=True)
+    foto = models.ForeignKey(Foto, on_delete=models.CASCADE, null=True, blank=True) 
+    # Adicionamos a coluna do vídeo (opcional também)
+    video = models.ForeignKey(Video, on_delete=models.CASCADE, null=True, blank=True) 
     adicionado_em = models.DateTimeField(auto_now_add=True)
 
-    class Meta:
-        unique_together = ('carrinho', 'foto')
-
     def __str__(self):
-        return f"Foto {self.foto.id} no {self.carrinho}"
+        # Pequena adaptação para mostrar corretamente no painel Admin
+        if self.foto: return f"Foto {self.foto.id} no {self.carrinho}"
+        if self.video: return f"Vídeo {self.video.id} no {self.carrinho}"
+        return f"Item vazio no {self.carrinho}"
     
 
 class Pedido(models.Model):
@@ -82,16 +85,15 @@ class Pedido(models.Model):
 
 class ItemPedido(models.Model):
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name='itens')
-    foto = models.ForeignKey(Foto, on_delete=models.PROTECT) # PROTECT é perfeito aqui
+    foto = models.ForeignKey(Foto, on_delete=models.PROTECT, null=True, blank=True) # <-- Alterado
+    video = models.ForeignKey(Video, on_delete=models.PROTECT, null=True, blank=True) # <-- Adicionado
     preco = models.DecimalField(max_digits=10, decimal_places=2)
     pago_ao_fotografo = models.BooleanField(default=False)
 
-    def __str__(self):
-        return f"Item do Pedido {self.pedido.id} - Foto {self.foto.id}"
-
 class FotoComprada(models.Model):
     cliente = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name='fotos_compradas')
-    foto = models.ForeignKey(Foto, on_delete=models.CASCADE)
+    foto = models.ForeignKey(Foto, on_delete=models.CASCADE, null=True, blank=True) # <-- Alterado
+    video = models.ForeignKey(Video, on_delete=models.CASCADE, null=True, blank=True) # <-- Adicionado
     data_compra = models.DateTimeField(auto_now_add=True)
     data_expiracao = models.DateTimeField()
 
@@ -150,3 +152,30 @@ class HistoricoPagamentoFotografo(models.Model):
 
     def __str__(self):
         return f"Pagamento R$ {self.valor_pago} para {self.fotografo.nome_completo} em {self.data_pagamento.strftime('%d/%m/%Y')}"
+
+class PropostaCompra(models.Model):
+    STATUS_CHOICES = [
+        ('PENDENTE', 'Pendente (Aguardando Fotógrafo)'),
+        ('ACEITA', 'Aceita pelo Fotógrafo'),
+        ('RECUSADA', 'Recusada pelo Fotógrafo'),
+        ('CONTRAPROPOSTA', 'Contra-proposta Enviada'),
+        ('CONTRAPROPOSTA_ACEITA', 'Contra-proposta Aceita pelo Cliente'),
+        ('CONTRAPROPOSTA_RECUSADA', 'Contra-proposta Recusada pelo Cliente')
+    ]
+    
+    cliente = models.ForeignKey('contas.Usuario', on_delete=models.CASCADE, related_name='propostas_feitas')
+    album = models.ForeignKey('galeria.Album', on_delete=models.CASCADE, related_name='propostas_recebidas')
+    
+    # Agora separamos as quantidades
+    quantidade_fotos = models.PositiveIntegerField("Quantidade de Fotos", default=0)
+    quantidade_videos = models.PositiveIntegerField("Quantidade de Vídeos", default=0)
+    
+    # Valores da negociação
+    valor_oferecido = models.DecimalField("Valor Oferecido (R$)", max_digits=10, decimal_places=2)
+    valor_contraproposta = models.DecimalField("Contra-proposta (R$)", max_digits=10, decimal_places=2, null=True, blank=True)
+    
+    status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='PENDENTE')
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Proposta #{self.id} | Cliente: {self.cliente.nome_completo} | R$ {self.valor_oferecido}"

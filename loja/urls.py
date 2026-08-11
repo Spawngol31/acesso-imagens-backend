@@ -18,10 +18,16 @@ from .views import (
     AdminVendasJSONView,
     RegistrarPagamentoFotografoView,
     AdminHistoricoPagamentosView,
+    FotografoCarrinhosAtivosView,
     FotografoVendasJSONView, 
     FotografoHistoricoPagamentosView,
     BulkDownloadFotosZipView,
-    BulkEnviarFotosEmailView
+    BulkEnviarFotosEmailView,
+    CriarPropostaView, 
+    FotografoPropostasView, 
+    ResponderPropostaView,
+    ClientePropostasView,
+    ClienteResponderContrapropostaView
 )
 
 # --- Cria um roteador para as ViewSets do dashboard deste app ---
@@ -38,12 +44,18 @@ urlpatterns = [
     path('checkout/mp/process/', MercadoPagoProcessPaymentView.as_view(), name='mp-process'), # <--- ADICIONE ESTA LINHA
     path('webhooks/mp/', MercadoPagoWebhookView.as_view(), name='mp-webhook'),
 
+    path('propostas/criar/', CriarPropostaView.as_view(), name='criar-proposta'),
+    path('minhas-propostas/', ClientePropostasView.as_view(), name='cliente-propostas'),
+    path('minhas-propostas/<int:pk>/<str:acao>/', ClienteResponderContrapropostaView.as_view(), name='responder-contraproposta'),
     path('minhas-compras/', MinhasComprasView.as_view(), name='minhas-compras'),
     path('download-foto/<int:foto_id>/', DownloadFotoView.as_view(), name='download-foto'),
     path('download-foto/<int:foto_id>/enviar-email/', EnviarFotoEmailView.as_view(), name='enviar_foto_email'),
     path('download-fotos-zip/', BulkDownloadFotosZipView.as_view(), name='bulk-download-zip'),
     path('enviar-fotos-email/', BulkEnviarFotosEmailView.as_view(), name='bulk-enviar-email'),
 
+    path('dashboard/propostas/', FotografoPropostasView.as_view(), name='listar-propostas'),
+    path('dashboard/propostas/<int:pk>/<str:acao>/', ResponderPropostaView.as_view(), name='responder-proposta'),
+    path('dashboard/carrinhos-ativos/', FotografoCarrinhosAtivosView.as_view(), name='dashboard-carrinhos-ativos'),
     path('dashboard/minhas-vendas-json/', FotografoVendasJSONView.as_view(), name='fotografo-vendas-json'),
     path('dashboard/meus-recibos/', FotografoHistoricoPagamentosView.as_view(), name='fotografo-recibos'),
     path('dashboard/vendas/', VendasFotografoView.as_view(), name='dashboard-vendas'),

@@ -23,5 +23,6 @@ class FotografoListView(generics.ListAPIView):
         # Filtramos e já pedimos ao Banco de Dados para ordenar pelo ID do usuário
         return PerfilFotografo.objects.filter(
             usuario__is_active=True,
+            usuario__mostrar_no_quem_somos=True, # <--- A MÁGICA ACONTECE AQUI! Só envia quem estiver marcado
             usuario__papel__in=papeis_da_equipe
-        ).order_by('usuario__id') # Ordena do menor ID para o maior (mais antigos primeiro)
+        ).order_by('usuario__id')

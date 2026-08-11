@@ -8,7 +8,7 @@ from perfis.serializers import PerfilClienteSerializer, PerfilFotografoSerialize
 class UsuarioSerializer(serializers.ModelSerializer):
     class Meta:
         model = Usuario
-        fields = ['id', 'email', 'nome_completo', 'papel']
+        fields = ['id', 'email', 'nome_completo', 'papel', 'mostrar_no_quem_somos']
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
     password2 = serializers.CharField(style={'input_type': 'password'}, write_only=True)
@@ -39,6 +39,7 @@ class UserAdminSerializer(serializers.ModelSerializer):
         model = Usuario
         fields = [
             'id', 'email', 'nome_completo', 'papel', 'is_active',
+            'mostrar_no_quem_somos',
             'perfil_cliente', 'perfil_fotografo'
         ]
     
