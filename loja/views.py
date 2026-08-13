@@ -37,8 +37,8 @@ from rest_framework.views import APIView
 from contas.models import Usuario
 from contas.permissions import IsCliente, IsFotografoOrAdmin, IsAdminUser
 from galeria.models import Foto, Video
-from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada, HistoricoPagamentoFotografo, PropostaCompra
-from .serializers import CarrinhoSerializer, PedidoSerializer, VendaFotografoSerializer, CupomSerializer, PropostaCompraSerializer
+from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, FotoComprada, HistoricoPagamentoFotografo, PropostaCompra, SolicitacaoSaque
+from .serializers import CarrinhoSerializer, PedidoSerializer, VendaFotografoSerializer, CupomSerializer, PropostaCompraSerializer, SolicitacaoSaqueSerializer
 
 # --- VIEWS DO FLUXO DE COMPRA DO CLIENTE ---
 
@@ -1170,3 +1170,109 @@ class ClientePropostasView(APIView):
         propostas = PropostaCompra.objects.filter(cliente=request.user).order_by('-criado_em')
         serializer = PropostaCompraSerializer(propostas, many=True)
         return Response(serializer.data)
+
+# --- VIEWS DE SAQUE (NOVO) ---
+
+class FotografoSolicitacaoSaqueView(APIView):
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
+
+    def get(self, request):
+        saques = SolicitacaoSaque.objects.filter(fotografo=request.user).order_by('-criado_em')
+        serializer = SolicitacaoSaqueSerializer(saques, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        # 1. Trava anti-spam (só permite um saque pendente de cada vez)
+        if SolicitacaoSaque.objects.filter(fotografo=request.user, status='PENDENTE').exists():
+            return Response({"error": "Você já possui uma solicitação de saque em análise. Aguarde a conclusão dela."}, status=status.HTTP_400_BAD_REQUEST)
+
+        chave_pix = request.data.get('chave_pix')
+
+        if not chave_pix:
+            return Response({"error": "A Chave PIX é obrigatória."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 2. Calcula o Saldo Real Disponível DIRETAMENTE NO SERVIDOR
+        itens_pendentes = ItemPedido.objects.select_related('pedido').prefetch_related('pedido__itens').filter(
+            foto__album__fotografo=request.user,
+            pedido__status=Pedido.StatusPedido.PAGO,
+            pago_ao_fotografo=False
+        )
+        
+        saldo_disponivel = 0.0
+        for item in itens_pendentes:
+            valor_real_aux = 0.0
+            if item.preco and item.pedido.valor_total:
+                subtotal = sum(i.preco for i in item.pedido.itens.all() if i.preco)
+                if subtotal > 0:
+                    valor_real_aux = float(item.preco) * (float(item.pedido.valor_total) / float(subtotal))
+                else:
+                    valor_real_aux = float(item.preco)
+            saldo_disponivel += valor_real_aux * 0.95
+
+        # 3. Trava: Impede o saque se o saldo for zero
+        if saldo_disponivel <= 0:
+            return Response({"error": "Você não tem saldo pendente disponível para saque."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 4. Cria a solicitação USANDO O VALOR EXATO DO BANCO DE DADOS (Ignorando o front-end)
+        saque = SolicitacaoSaque.objects.create(
+            fotografo=request.user,
+            valor=saldo_disponivel,
+            chave_pix=chave_pix
+        )
+        
+        serializer = SolicitacaoSaqueSerializer(saque)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+class AdminSolicitacaoSaqueView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get(self, request):
+        # O Admin pode filtrar por status (ex: listar só os PENDENTE)
+        status_param = request.GET.get('status')
+        saques = SolicitacaoSaque.objects.all().order_by('-criado_em')
+        
+        if status_param:
+            saques = saques.filter(status=status_param)
+        
+        serializer = SolicitacaoSaqueSerializer(saques, many=True)
+        return Response(serializer.data)
+
+    @transaction.atomic
+    def post(self, request, pk, acao):
+        # Ação esperada na URL: 'aprovar' ou 'recusar'
+        try:
+            saque = SolicitacaoSaque.objects.get(pk=pk)
+        except SolicitacaoSaque.DoesNotExist:
+            return Response({"error": "Solicitação não encontrada."}, status=status.HTTP_404_NOT_FOUND)
+
+        if saque.status != 'PENDENTE':
+            return Response({"error": f"Esta solicitação já foi {saque.status.lower()}."}, status=status.HTTP_400_BAD_REQUEST)
+
+        observacao = request.data.get('observacao', '')
+        comprovante = request.FILES.get('comprovante') # <-- LÊ O ARQUIVO AQUI
+
+        if acao == 'recusar':
+            saque.status = 'RECUSADA'
+            saque.observacao = observacao
+            saque.save()
+            return Response({"status": "A solicitação foi recusada e o saldo regressou para o fotógrafo."})
+        
+        elif acao == 'aprovar':
+            itens_pendentes = ItemPedido.objects.filter(
+                foto__album__fotografo=saque.fotografo,
+                pedido__status=Pedido.StatusPedido.PAGO,
+                pago_ao_fotografo=False
+            )
+            total_vendas_atualizadas = itens_pendentes.update(pago_ao_fotografo=True)
+
+            HistoricoPagamentoFotografo.objects.create(fotografo=saque.fotografo, valor_pago=saque.valor)
+
+            saque.status = 'PAGO'
+            saque.observacao = observacao
+            if comprovante: # <-- GUARDA O ARQUIVO SE ELE EXISTIR
+                saque.comprovante = comprovante
+            saque.save()
+
+            return Response({"status": f"Saque aprovado com sucesso! {total_vendas_atualizadas} vendas foram marcadas como pagas."})
+        else:
+            return Response({"error": "Ação inválida."}, status=status.HTTP_400_BAD_REQUEST)

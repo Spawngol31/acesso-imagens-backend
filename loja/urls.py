@@ -27,7 +27,9 @@ from .views import (
     FotografoPropostasView, 
     ResponderPropostaView,
     ClientePropostasView,
-    ClienteResponderContrapropostaView
+    ClienteResponderContrapropostaView,
+    FotografoSolicitacaoSaqueView,
+    AdminSolicitacaoSaqueView
 )
 
 # --- Cria um roteador para as ViewSets do dashboard deste app ---
@@ -59,6 +61,9 @@ urlpatterns = [
     path('dashboard/minhas-vendas-json/', FotografoVendasJSONView.as_view(), name='fotografo-vendas-json'),
     path('dashboard/meus-recibos/', FotografoHistoricoPagamentosView.as_view(), name='fotografo-recibos'),
     path('dashboard/vendas/', VendasFotografoView.as_view(), name='dashboard-vendas'),
+    path('dashboard/saques/', FotografoSolicitacaoSaqueView.as_view(), name='fotografo-saques'),
+    path('admin/saques/', AdminSolicitacaoSaqueView.as_view(), name='admin-saques-listar'),
+    path('admin/saques/<int:pk>/<str:acao>/', AdminSolicitacaoSaqueView.as_view(), name='admin-saques-acao'),
     path('admin/stats/', AdminStatsView.as_view(), name='admin-stats'),
     path('admin/exportar-pagamentos/', ExportarPagamentosCSVView.as_view(), name='exportar-pagamentos'),
     path('admin/vendas-json/', AdminVendasJSONView.as_view(), name='admin-vendas-json'),

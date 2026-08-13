@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 from rest_framework import serializers
-from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, PropostaCompra
+from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, PropostaCompra, SolicitacaoSaque
 from galeria.models import Foto, Video
 # Não precisamos mais de importar o FotoSerializer da galeria
 
@@ -215,3 +215,15 @@ class PropostaCompraSerializer(serializers.ModelSerializer):
             'valor_oferecido', 'valor_contraproposta', 'status', 'criado_em'
         ]
         read_only_fields = ['id', 'cliente', 'status', 'criado_em']
+
+class SolicitacaoSaqueSerializer(serializers.ModelSerializer):
+    fotografo_nome = serializers.CharField(source='fotografo.nome_completo', read_only=True)
+    fotografo_email = serializers.CharField(source='fotografo.email', read_only=True)
+
+    class Meta:
+        model = SolicitacaoSaque
+        fields = [
+            'id', 'fotografo', 'fotografo_nome', 'fotografo_email', 
+            'valor', 'chave_pix', 'status', 'observacao', 'comprovante', 'criado_em', 'atualizado_em'
+        ]
+        read_only_fields = ['id', 'fotografo', 'status', 'criado_em', 'atualizado_em']

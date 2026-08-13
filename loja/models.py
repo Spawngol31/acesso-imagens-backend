@@ -179,3 +179,27 @@ class PropostaCompra(models.Model):
 
     def __str__(self):
         return f"Proposta #{self.id} | Cliente: {self.cliente.nome_completo} | R$ {self.valor_oferecido}"
+
+class SolicitacaoSaque(models.Model):
+    STATUS_CHOICES = [
+        ('PENDENTE', 'Pendente (Aguardando Pagamento)'),
+        ('PAGO', 'Pago'),
+        ('RECUSADA', 'Recusada')
+    ]
+    
+    fotografo = models.ForeignKey(
+        Usuario, 
+        on_delete=models.CASCADE, 
+        related_name='saques_solicitados', 
+        limit_choices_to={'papel': Usuario.Papel.FOTOGRAFO}
+    )
+    valor = models.DecimalField("Valor Solicitado (R$)", max_digits=10, decimal_places=2)
+    chave_pix = models.CharField("Chave PIX", max_length=255, help_text="Chave PIX para recebimento")
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDENTE')
+    observacao = models.TextField("Observação/Motivo", blank=True, null=True, help_text="Motivo em caso de recusa ou ID de transação bancária")
+    comprovante = models.FileField(upload_to='comprovantes_saque/', blank=True, null=True, help_text="Comprovante de transferência (Imagem ou PDF)")
+    criado_em = models.DateTimeField(auto_now_add=True)
+    atualizado_em = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Saque #{self.id} | {self.fotografo.nome_completo} | R$ {self.valor} | {self.status}"
