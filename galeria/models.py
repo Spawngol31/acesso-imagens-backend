@@ -103,3 +103,20 @@ class FaceIndexada(models.Model):
 
     def __str__(self):
         return f"Face {self.rekognition_face_id} em Foto {self.foto.id}"
+
+# --- NOVO MODELO: AVALIAÇÕES DA HOME PAGE ---
+class Avaliacao(models.Model):
+    autor = models.CharField("Nome do Cliente", max_length=150)
+    papel = models.CharField("Papel/Cargo (Ex: Atleta, Clube)", max_length=150, blank=True, null=True)
+    texto = models.TextField("Avaliação/Depoimento")
+    estrelas = models.PositiveIntegerField(default=5, help_text="Número de estrelas de 1 a 5")
+    mostrar_na_home = models.BooleanField("Mostrar na Home Page", default=True)
+    criado_em = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Avaliação"
+        verbose_name_plural = "Avaliações"
+        ordering = ['-criado_em']
+
+    def __str__(self):
+        return f"{self.autor} - {self.estrelas} Estrelas"

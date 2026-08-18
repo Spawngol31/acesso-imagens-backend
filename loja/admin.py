@@ -74,7 +74,7 @@ def exportar_pagamento_csv(modeladmin, request, queryset):
 class ItemPedidoInline(admin.TabularInline):
     model = ItemPedido
     extra = 0
-    readonly_fields = ('foto', 'preco')
+    readonly_fields = ('foto', 'video', 'preco') # <--- MÁGICA FEITA AQUI
     can_delete = False
 
     def has_add_permission(self, request, obj=None):

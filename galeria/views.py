@@ -7,7 +7,7 @@ from rest_framework import generics, viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from decimal import Decimal, InvalidOperation
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -18,7 +18,7 @@ from io import BytesIO
 from .tasks import distribuir_foto_para_ftps, distribuir_foto_temporaria_ftp, processar_preview_video
 
 # Importa os modelos e serializers
-from .models import Album, Foto, Video, FaceIndexada
+from .models import Album, Foto, Video, FaceIndexada, Avaliacao
 from .serializers import (
     AlbumSerializer, 
     AlbumDetailSerializer, 
@@ -27,7 +27,8 @@ from .serializers import (
     VideoUploadSerializer,
     AlbumDashboardSerializer,
     FotoDashboardSerializer,
-    VideoDashboardSerializer
+    VideoDashboardSerializer,
+    AvaliacaoSerializer
 )
 
 # Permissões do app contas
@@ -397,3 +398,25 @@ def album_share_preview(request, pk):
     </html>
     """
     return HttpResponse(html)
+
+# ==========================================
+# VIEWS DE AVALIAÇÕES (GOOGLE REVIEWS)
+# ==========================================
+
+# Rota Pública para a Home Page
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def avaliacoes_destaques(request):
+    # Puxa apenas as avaliações ativas para a Home, ordenadas pelas mais recentes
+    avaliacoes = Avaliacao.objects.filter(mostrar_na_home=True).order_by('-criado_em')
+    serializer = AvaliacaoSerializer(avaliacoes, many=True)
+    return Response(serializer.data)
+
+# ViewSet para o Painel Admin (Criar, Editar, Excluir, Listar tudo)
+class AvaliacaoViewSet(viewsets.ModelViewSet):
+    queryset = Avaliacao.objects.all().order_by('-criado_em')
+    serializer_class = AvaliacaoSerializer
+    
+    # Aqui garantimos que só utilizadores logados (Admin) podem gerir as avaliações
+    # Se tiver uma permissão específica de Admin (ex: IsAdminUser), pode usá-la aqui.
+    permission_classes = [IsAuthenticated, IsAdminUser]

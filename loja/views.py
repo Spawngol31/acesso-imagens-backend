@@ -129,22 +129,44 @@ class MercadoPagoCheckoutView(APIView):
             if total <= 0:
                 return Response({"error": "O valor total do pedido deve ser positivo."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 1. Cria o Pedido
+            # 1. Cria o Pedido (MANTENHA ESTA PARTE IGUAL)
             pedido = Pedido.objects.create(
                 cliente=request.user,
                 valor_total=Decimal(total)
             )
+            
             itens_do_pedido = []
+            
+            # --- NOVO LOOP CORRIGIDO AQUI ---
             for item_carrinho in carrinho.itens.all():
+                
+                # 1. Descobre se o item é uma foto ou um vídeo
+                if item_carrinho.foto:
+                    foto_obj = item_carrinho.foto
+                    video_obj = None
+                    preco_item = item_carrinho.foto.preco
+                    titulo_mp = f"Foto ID: {item_carrinho.foto.id}"
+                elif getattr(item_carrinho, 'video', None):
+                    foto_obj = None
+                    video_obj = item_carrinho.video
+                    preco_item = item_carrinho.video.preco
+                    titulo_mp = f"Vídeo ID: {item_carrinho.video.id}"
+                else:
+                    continue # Ignora se por algum motivo houver um item vazio
+
+                # 2. Salva o item no Banco de Dados com a mídia correta
                 ItemPedido.objects.create(
                     pedido=pedido,
-                    foto=item_carrinho.foto,
-                    preco=item_carrinho.foto.preco
+                    foto=foto_obj,
+                    video=video_obj, # Assumindo que o seu model ItemPedido já tem a coluna 'video'
+                    preco=preco_item
                 )
+                
+                # 3. Adiciona o item à lista que vai para o Mercado Pago
                 itens_do_pedido.append({
-                    "title": f"Foto ID: {item_carrinho.foto.id}",
+                    "title": titulo_mp,
                     "quantity": 1,
-                    "unit_price": float(item_carrinho.foto.preco),
+                    "unit_price": float(preco_item),
                     "currency_id": "BRL"
                 })
             
@@ -866,6 +888,14 @@ class RegistrarPagamentoFotografoView(APIView):
                 referencia_fim=parse_date(data_fim) if data_fim else None
             )
 
+            SolicitacaoSaque.objects.filter(
+                fotografo=fotografo, 
+                status='PENDENTE'
+            ).update(
+                status='PAGO', 
+                observacao='Pago e unificado através do Zeramento de Saldo no Painel Financeiro.'
+            )
+
             return Response({
                 "mensagem": "Pagamento registrado com sucesso!",
                 "vendas_atualizadas": total_atualizado,
@@ -1173,11 +1203,39 @@ class ClientePropostasView(APIView):
 
 # --- VIEWS DE SAQUE (NOVO) ---
 
+# --- VIEWS DE SAQUE ATUALIZADAS E DINÂMICAS ---
+
 class FotografoSolicitacaoSaqueView(APIView):
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def get(self, request):
         saques = SolicitacaoSaque.objects.filter(fotografo=request.user).order_by('-criado_em')
+        
+        # 🔥 MÁGICA 1: O Fotógrafo vê o valor a subir em tempo real na tela dele!
+        for saque in saques:
+            if saque.status == 'PENDENTE':
+                itens_pendentes = ItemPedido.objects.select_related('pedido').prefetch_related('pedido__itens').filter(
+                    foto__album__fotografo=request.user,
+                    pedido__status=Pedido.StatusPedido.PAGO,
+                    pago_ao_fotografo=False
+                )
+                
+                saldo_atualizado = 0.0
+                for item in itens_pendentes:
+                    valor_real_aux = 0.0
+                    if item.preco and item.pedido.valor_total:
+                        subtotal = sum(i.preco for i in item.pedido.itens.all() if i.preco)
+                        if subtotal > 0:
+                            valor_real_aux = float(item.preco) * (float(item.pedido.valor_total) / float(subtotal))
+                        else:
+                            valor_real_aux = float(item.preco)
+                    saldo_atualizado += valor_real_aux * 0.95
+                
+                # Se o saldo cresceu, atualizamos o "papelzinho" da solicitação
+                if float(saque.valor) != saldo_atualizado and saldo_atualizado > 0:
+                    saque.valor = saldo_atualizado
+                    saque.save()
+
         serializer = SolicitacaoSaqueSerializer(saques, many=True)
         return Response(serializer.data)
 
@@ -1223,6 +1281,7 @@ class FotografoSolicitacaoSaqueView(APIView):
         serializer = SolicitacaoSaqueSerializer(saque)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+
 class AdminSolicitacaoSaqueView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
 
@@ -1233,6 +1292,30 @@ class AdminSolicitacaoSaqueView(APIView):
         
         if status_param:
             saques = saques.filter(status=status_param)
+
+        # 🔥 MÁGICA 2: O Admin também vê o valor finalizado e atualizado na tabela de pendentes
+        for saque in saques:
+            if saque.status == 'PENDENTE':
+                itens_pendentes = ItemPedido.objects.select_related('pedido').prefetch_related('pedido__itens').filter(
+                    foto__album__fotografo=saque.fotografo,
+                    pedido__status=Pedido.StatusPedido.PAGO,
+                    pago_ao_fotografo=False
+                )
+                
+                saldo_atualizado = 0.0
+                for item in itens_pendentes:
+                    valor_real_aux = 0.0
+                    if item.preco and item.pedido.valor_total:
+                        subtotal = sum(i.preco for i in item.pedido.itens.all() if i.preco)
+                        if subtotal > 0:
+                            valor_real_aux = float(item.preco) * (float(item.pedido.valor_total) / float(subtotal))
+                        else:
+                            valor_real_aux = float(item.preco)
+                    saldo_atualizado += valor_real_aux * 0.95
+                
+                if float(saque.valor) != saldo_atualizado and saldo_atualizado > 0:
+                    saque.valor = saldo_atualizado
+                    saque.save()
         
         serializer = SolicitacaoSaqueSerializer(saques, many=True)
         return Response(serializer.data)
@@ -1249,7 +1332,7 @@ class AdminSolicitacaoSaqueView(APIView):
             return Response({"error": f"Esta solicitação já foi {saque.status.lower()}."}, status=status.HTTP_400_BAD_REQUEST)
 
         observacao = request.data.get('observacao', '')
-        comprovante = request.FILES.get('comprovante') # <-- LÊ O ARQUIVO AQUI
+        comprovante = request.FILES.get('comprovante')
 
         if acao == 'recusar':
             saque.status = 'RECUSADA'
@@ -1258,21 +1341,51 @@ class AdminSolicitacaoSaqueView(APIView):
             return Response({"status": "A solicitação foi recusada e o saldo regressou para o fotógrafo."})
         
         elif acao == 'aprovar':
-            itens_pendentes = ItemPedido.objects.filter(
+            itens_pendentes = ItemPedido.objects.select_related('pedido').prefetch_related('pedido__itens').filter(
                 foto__album__fotografo=saque.fotografo,
                 pedido__status=Pedido.StatusPedido.PAGO,
                 pago_ao_fotografo=False
             )
+
+            # 1. Calcula o saldo cravado no milissegundo em que o admin clicou no botão verde
+            saldo_final = 0.0
+            for item in itens_pendentes:
+                valor_real_aux = 0.0
+                if item.preco and item.pedido.valor_total:
+                    subtotal = sum(i.preco for i in item.pedido.itens.all() if i.preco)
+                    if subtotal > 0:
+                        valor_real_aux = float(item.preco) * (float(item.pedido.valor_total) / float(subtotal))
+                    else:
+                        valor_real_aux = float(item.preco)
+                saldo_final += valor_real_aux * 0.95
+
+            # 2. 🔥 MÁGICA 3: APURA AS DATAS DO PERÍODO EXATO
+            from django.db.models import Min, Max
+            from django.utils import timezone
+            datas = itens_pendentes.aggregate(min_data=Min('pedido__criado_em'), max_data=Max('pedido__criado_em'))
+            
+            data_inicio = datas['min_data'].date() if datas['min_data'] else timezone.now().date()
+            data_fim = datas['max_data'].date() if datas['max_data'] else timezone.now().date()
+
+            # 3. Marca os itens como pagos
             total_vendas_atualizadas = itens_pendentes.update(pago_ao_fotografo=True)
 
-            HistoricoPagamentoFotografo.objects.create(fotografo=saque.fotografo, valor_pago=saque.valor)
+            # 4. Gera o Recibo Oficial com as Datas e o Valor Atualizado!
+            HistoricoPagamentoFotografo.objects.create(
+                fotografo=saque.fotografo, 
+                valor_pago=saldo_final,
+                referencia_inicio=data_inicio,
+                referencia_fim=data_fim
+            )
 
+            # 5. Atualiza o status da Solicitação
+            saque.valor = saldo_final # Atualiza o valor final para ficar certinho no histórico!
             saque.status = 'PAGO'
             saque.observacao = observacao
-            if comprovante: # <-- GUARDA O ARQUIVO SE ELE EXISTIR
+            if comprovante: 
                 saque.comprovante = comprovante
             saque.save()
 
-            return Response({"status": f"Saque aprovado com sucesso! {total_vendas_atualizadas} vendas foram marcadas como pagas."})
+            return Response({"status": f"Saque aprovado com sucesso! {total_vendas_atualizadas} vendas foram marcadas como pagas no valor total de R$ {saldo_final:.2f}."})
         else:
             return Response({"error": "Ação inválida."}, status=status.HTTP_400_BAD_REQUEST)

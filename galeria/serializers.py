@@ -4,7 +4,7 @@ import boto3
 from botocore.exceptions import ClientError
 from django.conf import settings
 from rest_framework import serializers
-from .models import Foto, Album, Video
+from .models import Album, Foto, Video, FaceIndexada, Avaliacao
 from contas.models import Usuario
 
 # --- SERIALIZER DE FOTO (COM A LÓGICA CORRETA) ---
@@ -180,3 +180,8 @@ class VideoDashboardSerializer(serializers.ModelSerializer):
         if obj.arquivo_preview and obj.arquivo_preview.name:
             return obj.arquivo_preview.url
         return None
+
+class AvaliacaoSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Avaliacao
+        fields = '__all__'
