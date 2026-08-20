@@ -18,7 +18,7 @@ from botocore.exceptions import ClientError
 from django.conf import settings
 from django.core.mail import send_mail
 from django.db import transaction
-from django.db.models import Sum, Count, Q, Prefetch # 🚀 Agrupamos os do models aqui!
+from django.db.models import Sum, Count, Q, F, Prefetch
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
@@ -1281,6 +1281,22 @@ class FotografoSolicitacaoSaqueView(APIView):
         serializer = SolicitacaoSaqueSerializer(saque)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+class RankingAlbunsFotografoView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        ranking = ItemPedido.objects.filter(
+            foto__album__fotografo=request.user,
+            pedido__status=Pedido.StatusPedido.PAGO
+        ).values(
+            album_id=F('foto__album__id'),
+            album_titulo=F('foto__album__titulo')
+        ).annotate(
+            total_arrecadado=Sum('preco'),
+            qtd_vendida=Count('id')
+        ).order_by('-total_arrecadado')[:5] # Traz apenas os 5 melhores
+
+        return Response(ranking)
 
 class AdminSolicitacaoSaqueView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
@@ -1389,3 +1405,20 @@ class AdminSolicitacaoSaqueView(APIView):
             return Response({"status": f"Saque aprovado com sucesso! {total_vendas_atualizadas} vendas foram marcadas como pagas no valor total de R$ {saldo_final:.2f}."})
         else:
             return Response({"error": "Ação inválida."}, status=status.HTTP_400_BAD_REQUEST)
+
+class RankingAlbunsAdminView(APIView):
+    permission_classes = [IsAuthenticated, IsAdminUser]
+
+    def get(self, request):
+        ranking = ItemPedido.objects.filter(
+            pedido__status=Pedido.StatusPedido.PAGO
+        ).values(
+            album_id=F('foto__album__id'),
+            album_titulo=F('foto__album__titulo'),
+            fotografo_nome=F('foto__album__fotografo__nome_completo')
+        ).annotate(
+            total_arrecadado=Sum('preco'),
+            qtd_vendida=Count('id')
+        ).order_by('-total_arrecadado')[:10] # Traz os 10 melhores gerais
+
+        return Response(ranking)

@@ -29,6 +29,8 @@ from .views import (
     ClientePropostasView,
     ClienteResponderContrapropostaView,
     FotografoSolicitacaoSaqueView,
+    RankingAlbunsFotografoView,
+    RankingAlbunsAdminView,
     AdminSolicitacaoSaqueView
 )
 
@@ -62,6 +64,8 @@ urlpatterns = [
     path('dashboard/meus-recibos/', FotografoHistoricoPagamentosView.as_view(), name='fotografo-recibos'),
     path('dashboard/vendas/', VendasFotografoView.as_view(), name='dashboard-vendas'),
     path('dashboard/saques/', FotografoSolicitacaoSaqueView.as_view(), name='fotografo-saques'),
+    path('dashboard/ranking-albuns/', RankingAlbunsFotografoView.as_view(), name='ranking-albuns-fotografo'),
+    path('admin/ranking-albuns/', RankingAlbunsAdminView.as_view(), name='ranking-albuns-admin'),
     path('admin/saques/', AdminSolicitacaoSaqueView.as_view(), name='admin-saques-listar'),
     path('admin/saques/<int:pk>/<str:acao>/', AdminSolicitacaoSaqueView.as_view(), name='admin-saques-acao'),
     path('admin/stats/', AdminStatsView.as_view(), name='admin-stats'),
