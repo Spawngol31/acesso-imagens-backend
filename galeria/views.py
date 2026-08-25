@@ -1,6 +1,9 @@
+# galeria/views.py
+
 import boto3
 import uuid
-from django.db.models import Q
+from django.db.models import Sum, Count, Q, Value
+from django.db.models.functions import Coalesce
 from django.core.files.base import ContentFile
 from django.conf import settings
 from rest_framework import generics, viewsets, status
@@ -161,7 +164,8 @@ class FotoUploadView(APIView):
             'data': request.data.get('ftp_data', ''),
             'local': request.data.get('ftp_local', ''),
             'legenda': request.data.get('ftp_legenda', ''),
-            'creditos': request.data.get('ftp_creditos', '')
+            'creditos': request.data.get('ftp_creditos', ''),
+            'categoria': request.data.get('categoria', '')
         }
         
         jornais_ids = []
@@ -230,8 +234,23 @@ class AlbumViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def get_queryset(self):
-        if self.request.user.papel == 'ADMIN': return Album.objects.all()
-        return Album.objects.filter(fotografo=self.request.user)
+        queryset = Album.objects.all()
+        if self.request.user.papel != 'ADMIN':
+            queryset = queryset.filter(fotografo=self.request.user)
+
+        return queryset.annotate(
+            qtd_vendida=Count(
+                'fotos__itempedido', # <-- Corrigido aqui (usando o nome do model em minúsculas)
+                filter=Q(fotos__itempedido__pedido__status='PAGO')
+            ),
+            total_arrecadado=Coalesce(
+                Sum(
+                    'fotos__itempedido__preco', # <-- Corrigido aqui
+                    filter=Q(fotos__itempedido__pedido__status='PAGO')
+                ), 
+                Value(Decimal('0.00'))
+            )
+        ).order_by('-id')
 
     def perform_create(self, serializer):
         if self.request.user.papel == Usuario.Papel.FOTOGRAFO:

@@ -77,6 +77,7 @@ class Foto(models.Model):
     rotacao = models.IntegerField(default=0)
     miniatura_marca_dagua = models.ImageField(upload_to='miniaturas/', blank=True, null=True, storage=PublicMediaStorage())
     is_arquivado = models.BooleanField(default=False, help_text="Se marcado, a foto não será visível no site público.")
+    categoria = models.CharField(max_length=100, blank=True, null=True, help_text="Ex: Jogo 1, Premiação, Bastidores")
 
     # Os campos duplicados 'legenda' e 'data_upload' foram removidos
     
@@ -92,6 +93,7 @@ class Video(models.Model):
     arquivo_preview = models.FileField(upload_to='videos_previews/', storage=PublicMediaStorage(), blank=True, null=True)
     preco = models.DecimalField(max_digits=10, decimal_places=2, default=25.00)
     data_upload = models.DateTimeField(auto_now_add=True)
+    categoria = models.CharField(max_length=100, blank=True, null=True, help_text="Ex: Jogo 1, Premiação, Bastidores")
 
     def __str__(self):
         return self.titulo

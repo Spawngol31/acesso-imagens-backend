@@ -7,13 +7,15 @@ from rest_framework import serializers
 from .models import Album, Foto, Video, FaceIndexada, Avaliacao
 from contas.models import Usuario
 
-# --- SERIALIZER DE FOTO (COM A LÓGICA CORRETA) ---
+# --- SERIALIZER DE FOTO (ATUALIZADO PARA FOTOS NÃO IDENTIFICADAS) ---
 class FotoSerializer(serializers.ModelSerializer):
     imagem_url = serializers.SerializerMethodField()
+    tem_rostos = serializers.SerializerMethodField() # 🚀 NOVO: Campo calculado para a busca
 
     class Meta:
         model = Foto
-        fields = ['id', 'legenda', 'preco', 'imagem_url', 'rotacao', 'is_arquivado'] # Adicionámos 'is_arquivado'
+        # 🚀 NOVO: 'tem_rostos' adicionado ao final da lista
+        fields = ['id', 'legenda', 'preco', 'imagem_url', 'rotacao', 'is_arquivado', 'categoria', 'tem_rostos']
 
     def get_imagem_url(self, obj):
         # Lógica defensiva:
@@ -23,9 +25,13 @@ class FotoSerializer(serializers.ModelSerializer):
             return obj.miniatura_marca_dagua.url
         
         # 3. Se a miniatura ainda não foi processada (Celery a correr),
-        #    retornamos None para não "crashar" a API. O frontend
-        #    deve ser capaz de lidar com uma URL nula (ex: mostrar um placeholder).
+        #    retornamos None para não "crashar" a API.
         return None
+
+    # 🚀 NOVO: A mágica acontece aqui usando o 'related_name' do seu models.py
+    def get_tem_rostos(self, obj):
+        # Retorna True se a foto tiver rostos indexados pelo AWS Rekognition, ou False se não tiver
+        return obj.faces_indexadas.exists()
 
 # --- SERIALIZER DE VÍDEO (CORRIGIDO) ---
 class VideoSerializer(serializers.ModelSerializer):
@@ -36,7 +42,7 @@ class VideoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Video
         # <-- ADICIONADO 'arquivo_preview_url' na lista
-        fields = ['id', 'titulo', 'preco', 'miniatura_url', 'arquivo_preview_url'] 
+        fields = ['id', 'titulo', 'preco', 'miniatura_url', 'arquivo_preview_url', 'categoria'] 
 
     def get_miniatura_url(self, obj):
         if obj.miniatura and obj.miniatura.name:
@@ -117,12 +123,12 @@ class AlbumDetailSerializer(AlbumSerializer):
 class FotoUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Foto
-        fields = ['album', 'imagem', 'legenda', 'preco']
+        fields = ['album', 'imagem', 'legenda', 'preco', 'categoria']
 
 class VideoUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Video
-        fields = ['album', 'titulo', 'preco', 'arquivo_video']
+        fields = ['album', 'titulo', 'preco', 'arquivo_video', 'categoria']
 
     # --- CORREÇÃO 2: GERAR TÍTULO AUTOMÁTICO ---
     def create(self, validated_data):
@@ -139,12 +145,14 @@ class VideoUploadSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 class AlbumDashboardSerializer(serializers.ModelSerializer):
+    qtd_vendida = serializers.IntegerField(read_only=True, default=0)
+    total_arrecadado = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True, default=0.00)
     class Meta:
         model = Album
         fields = [
             'id', 'titulo', 'descricao', 'data_evento', 'categoria', 
             'local', 'is_publico', 'slug', 'fotografo',
-            'capa', 'is_arquivado', 
+            'capa', 'is_arquivado', 'qtd_vendida', 'total_arrecadado',
             'qtd_desconto_1', 'pct_desconto_1',
             'qtd_desconto_2', 'pct_desconto_2',
             'qtd_desconto_3', 'pct_desconto_3'
@@ -157,7 +165,7 @@ class FotoDashboardSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'album', 'legenda', 'preco', 
             'imagem', 'miniatura_marca_dagua',
-            'rotacao', 'is_arquivado'
+            'rotacao', 'is_arquivado', 'categoria'
         ]
         read_only_fields = ['id', 'album', 'imagem', 'miniatura_marca_dagua']
 
@@ -169,7 +177,7 @@ class VideoDashboardSerializer(serializers.ModelSerializer):
     class Meta:
         model = Video
         # Adicionamos 'miniatura_url' e 'arquivo_preview_url' aqui
-        fields = ['id', 'album', 'titulo', 'arquivo_video', 'arquivo_preview_url', 'miniatura_url', 'preco', 'data_upload']
+        fields = ['id', 'album', 'titulo', 'arquivo_video', 'arquivo_preview_url', 'miniatura_url', 'preco', 'data_upload', 'categoria']
         
     def get_miniatura_url(self, obj):
         if obj.miniatura and obj.miniatura.name:
