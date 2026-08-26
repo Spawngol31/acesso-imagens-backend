@@ -16,7 +16,7 @@ from django.utils.decorators import method_decorator
 from django.db.models import Q
 
 from rest_framework import generics, status, viewsets, authentication
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, SAFE_METHODS, BasePermission
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
@@ -31,9 +31,10 @@ from .serializers import (
     UserRegistrationSerializer, 
     UserAdminSerializer,
     CustomTokenObtainPairSerializer,
-    JornalParceiroSerializer
+    JornalParceiroSerializer,
+    MateriaImprensaSerializer
 )
-from .models import Usuario, JornalParceiro
+from .models import Usuario, JornalParceiro, MateriaImprensa
 from perfis.models import PerfilFotografo
 from .permissions import IsAdminUser, IsFotografoOrAdmin
 from urllib.parse import urlparse
@@ -422,3 +423,29 @@ class MeuPerfilView(APIView):
             perfil.save()
 
         return Response({"mensagem": "Perfil atualizado com sucesso!"}, status=status.HTTP_200_OK)
+
+# --- VIEW DE MATÉRIAS DA IMPRENSA ---
+
+class IsEquipeComunicacaoOrReadOnly(BasePermission):
+    """
+    Qualquer visitante pode ver as matérias (GET).
+    Apenas ADMIN, JORNALISTA e ASSESSORES podem criar/editar/apagar.
+    """
+    def has_permission(self, request, view):
+        # Se for apenas leitura (GET), permite a todos
+        if request.method in SAFE_METHODS:
+            return True
+        
+        # Se for escrita (POST, DELETE, PATCH), verifica o papel
+        papeis_permitidos = [
+            Usuario.Papel.ADMIN, 
+            Usuario.Papel.JORNALISTA, 
+            Usuario.Papel.ASSESSOR_IMPRENSA, 
+            Usuario.Papel.ASSESSOR_COMUNICACAO
+        ]
+        return bool(request.user and request.user.is_authenticated and request.user.papel in papeis_permitidos)
+
+class MateriaImprensaViewSet(viewsets.ModelViewSet):
+    queryset = MateriaImprensa.objects.all()
+    serializer_class = MateriaImprensaSerializer
+    permission_classes = [IsEquipeComunicacaoOrReadOnly]

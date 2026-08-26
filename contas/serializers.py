@@ -2,7 +2,7 @@
 
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import Usuario, JornalParceiro
+from .models import Usuario, JornalParceiro, MateriaImprensa
 from perfis.serializers import PerfilClienteSerializer, PerfilFotografoSerializer
 
 class UsuarioSerializer(serializers.ModelSerializer):
@@ -95,4 +95,9 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 class JornalParceiroSerializer(serializers.ModelSerializer):
     class Meta:
         model = JornalParceiro
+        fields = '__all__'
+
+class MateriaImprensaSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MateriaImprensa
         fields = '__all__'

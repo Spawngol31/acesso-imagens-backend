@@ -1,19 +1,39 @@
 # contas/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ImageProxyView, PerfilUsuarioView, UserRegistrationView, PasswordResetRequestView, PasswordResetConfirmView, UserAdminViewSet, CustomTokenObtainPairView, GoogleLoginView, FacebookLoginView, MeuPerfilView, JornalParceiroViewSet
+
+from .views import ( 
+    ImageProxyView, 
+    PerfilUsuarioView, 
+    UserRegistrationView, 
+    PasswordResetRequestView, 
+    PasswordResetConfirmView, 
+    UserAdminViewSet, 
+    CustomTokenObtainPairView, 
+    GoogleLoginView, 
+    FacebookLoginView, 
+    MeuPerfilView, 
+    JornalParceiroViewSet, 
+    MateriaImprensaViewSet 
+)
+
 from rest_framework_simplejwt.views import (
     TokenRefreshView,
 )
 
-# from .views import PerfilUsuarioView
-
-# Roteador para os endpoints de administração de utilizadores
+# Roteador para os endpoints de administração de utilizadores (sob o /admin/)
 admin_router = DefaultRouter()
 admin_router.register(r'users', UserAdminViewSet, basename='admin-user')
 admin_router.register(r'jornais-parceiros', JornalParceiroViewSet, basename='jornal-parceiro')
 
+# 🚀 CORREÇÃO: Criar o roteador padrão para rotas gerais
+router = DefaultRouter()
+router.register(r'imprensa', MateriaImprensaViewSet, basename='imprensa')
+
 urlpatterns = [
+    # 🚀 CORREÇÃO: Incluir as rotas do roteador padrão
+    path('', include(router.urls)),
+    
     path('token/', CustomTokenObtainPairView.as_view(), name='token_obtain_pair'),
     path('token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('me/', PerfilUsuarioView.as_view(), name='perfil_usuario'),
