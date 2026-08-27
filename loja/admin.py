@@ -203,14 +203,15 @@ class ItemPedidoAdmin(admin.ModelAdmin):
 
 @admin.register(FotoComprada)
 class FotoCompradaAdmin(admin.ModelAdmin):
-    list_display = ('cliente', 'foto', 'data_compra')
+    list_display = ('id', 'cliente', 'foto', 'data_compra')
     
-    # 🛡️ MÁGICA ATUALIZADA: Usamos apenas 'foto' e 'cliente' 
-    # (que são as chaves estrangeiras que você realmente tem no modelo)
+    # 🛡️ MÁGICA DE PERFORMANCE (Evita o Erro 500 por excesso de consultas)
+    list_select_related = ('cliente', 'foto') 
+    list_per_page = 50 # Limita a carregar apenas 50 por página
+    
     raw_id_fields = ('foto', 'cliente') 
-    
-    # OPCIONAL: Protege os campos financeiros reais para não serem alterados por engano
-    # readonly_fields = ('foto', 'cliente')
+    search_fields = ('cliente__email', 'foto__id')
+    list_filter = ('data_compra',)
 
 @admin.register(Cupom)
 class CupomAdmin(admin.ModelAdmin):
