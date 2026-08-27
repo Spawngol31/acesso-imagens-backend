@@ -203,27 +203,32 @@ class ItemPedidoAdmin(admin.ModelAdmin):
 
 @admin.register(FotoComprada)
 class FotoCompradaAdmin(admin.ModelAdmin):
-    # Usamos funções seguras em vez dos campos diretos
-    list_display = ('id', 'get_cliente_seguro', 'get_foto_segura', 'data_compra')
+    # Tela completa e segura
+    list_display = ('id', 'get_cliente_seguro', 'get_item_comprado', 'data_compra')
     
-    list_select_related = ('cliente', 'foto')
+    # Select_related otimizado para incluir o vídeo
+    list_select_related = ('cliente', 'foto', 'video')
     list_per_page = 50
-    raw_id_fields = ('foto', 'cliente')
+    raw_id_fields = ('foto', 'video', 'cliente')
     
-    # 🛡️ FUNÇÃO BLINDADA PARA O CLIENTE
+    # Filtros e Pesquisas restaurados!
+    search_fields = ('cliente__email', 'foto__id', 'video__id')
+    list_filter = ('data_compra',)
+    
     def get_cliente_seguro(self, obj):
         if not obj.cliente:
-            return "Cliente Apagado/Nulo"
-        # Tenta pegar o email, se não tiver, pega o ID
-        return getattr(obj.cliente, 'email', f"Cliente ID: {obj.cliente.id}")
+            return "Cliente Apagado"
+        return getattr(obj.cliente, 'email', f"ID: {obj.cliente.id}")
     get_cliente_seguro.short_description = "Cliente"
 
-    # 🛡️ FUNÇÃO BLINDADA PARA A FOTO
-    def get_foto_segura(self, obj):
-        if not obj.foto:
-            return "Foto Apagada/Nula"
-        return f"Foto #{obj.foto.id}"
-    get_foto_segura.short_description = "Foto"
+    # 🛡️ Suporte duplo para Foto ou Vídeo
+    def get_item_comprado(self, obj):
+        if obj.foto:
+            return f"📸 Foto #{obj.foto.id}"
+        if obj.video:
+            return f"🎥 Vídeo #{obj.video.id}"
+        return "⚠️ Item Apagado"
+    get_item_comprado.short_description = "Item Comprado"
 
 @admin.register(Cupom)
 class CupomAdmin(admin.ModelAdmin):

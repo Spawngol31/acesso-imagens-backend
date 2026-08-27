@@ -92,8 +92,8 @@ class ItemPedido(models.Model):
 
 class FotoComprada(models.Model):
     cliente = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name='fotos_compradas')
-    foto = models.ForeignKey(Foto, on_delete=models.CASCADE, null=True, blank=True) # <-- Alterado
-    video = models.ForeignKey(Video, on_delete=models.CASCADE, null=True, blank=True) # <-- Adicionado
+    foto = models.ForeignKey(Foto, on_delete=models.CASCADE, null=True, blank=True)
+    video = models.ForeignKey(Video, on_delete=models.CASCADE, null=True, blank=True)
     data_compra = models.DateTimeField(auto_now_add=True)
     data_expiracao = models.DateTimeField()
 
@@ -102,8 +102,13 @@ class FotoComprada(models.Model):
             self.data_expiracao = timezone.now() + timedelta(days=60)
         super().save(*args, **kwargs)
 
+    # 🚀 A CORREÇÃO DA FALHA 500 ESTÁ AQUI:
     def __str__(self):
-        return f"{self.cliente.email} comprou a Foto {self.foto.id}"
+        if self.foto:
+            return f"{self.cliente.email} comprou a Foto #{self.foto.id}"
+        elif self.video:
+            return f"{self.cliente.email} comprou o Vídeo #{self.video.id}"
+        return f"{self.cliente.email} comprou um item (Apagado)"
 
     @property
     def is_valida(self):
