@@ -7,6 +7,8 @@ from django.db.models import Sum
 from .models import Pedido, ItemPedido, FotoComprada, Cupom
 from django.utils import timezone
 from rangefilter.filters import DateRangeFilter # <-- IMPORT NOVO PARA O CALENDÁRIO
+from django.utils.html import format_html
+from django.urls import reverse
 
 # --- 1. CRIAMOS O FILTRO FORÇADO DE FOTÓGRAFOS ---
 class FotografoFilter(admin.SimpleListFilter):
@@ -74,11 +76,28 @@ def exportar_pagamento_csv(modeladmin, request, queryset):
 class ItemPedidoInline(admin.TabularInline):
     model = ItemPedido
     extra = 0
-    readonly_fields = ('foto', 'video', 'preco') # <--- MÁGICA FEITA AQUI
     can_delete = False
+    
+    readonly_fields = ('get_midia_segura', 'preco', 'pago_ao_fotografo')
+    fields = ('get_midia_segura', 'preco', 'pago_ao_fotografo')
 
     def has_add_permission(self, request, obj=None):
         return False
+
+    # 🛡️ COLUNA INTELIGENTE (Agora com Link Clicável)
+    def get_midia_segura(self, obj):
+        if obj.foto:
+            # Constrói a rota: admin -> app 'galeria' -> modelo 'foto' -> página de edição (change)
+            url = reverse('admin:galeria_foto_change', args=[obj.foto.id])
+            return format_html('<a href="{}"><b>📸 Foto #{}</b></a>', url, obj.foto.id)
+            
+        if obj.video:
+            # Constrói a rota: admin -> app 'galeria' -> modelo 'video' -> página de edição (change)
+            url = reverse('admin:galeria_video_change', args=[obj.video.id])
+            return format_html('<a href="{}"><b>🎥 Vídeo #{}</b></a>', url, obj.video.id)
+            
+        return "⚠️ Item Apagado"
+    get_midia_segura.short_description = "Mídia Comprada"
 
 @admin.register(Pedido)
 class PedidoAdmin(admin.ModelAdmin):
@@ -100,7 +119,13 @@ class ItemPedidoAdmin(admin.ModelAdmin):
         'id', 'get_fotografo', 'foto', 'get_data_venda', 
         'get_metodo_pagamento', 'get_status_pedido', 'valor_venda', 'valor_fotografo'
     )
-    raw_id_fields = ('pedido', 'foto')
+    
+    # 1. Adicionamos o 'video' aqui para evitar que o Django tente criar listas gigantes
+    raw_id_fields = ('pedido', 'foto', 'video')
+    
+    # 🛡️ 2. TRAVA DE SEGURANÇA MÁXIMA: Impede o administrador de modificar a compra
+    readonly_fields = ('pedido', 'foto', 'video', 'preco')
+    
     list_filter = (('pedido__criado_em', DateRangeFilter), FotografoFilter, 'pedido__status')
     search_fields = ('foto__album__fotografo__email', 'pedido__id')
     actions = [exportar_pagamento_csv]
@@ -109,13 +134,18 @@ class ItemPedidoAdmin(admin.ModelAdmin):
     list_per_page = 30 
     show_full_result_count = False 
 
-    # 🚀 2. A MÁGICA: SÓ CARREGA SE TIVER FILTRO
+    # 🚀 2. A MÁGICA CORRIGIDA: SÓ BLOQUEIA NA PÁGINA DA TABELA
     def get_queryset(self, request):
+        # Adicionado o 'video' no select_related para manter o painel super rápido
         qs = super().get_queryset(request).select_related(
-            'foto', 'foto__album', 'foto__album__fotografo', 'pedido'
+            'foto', 'foto__album', 'foto__album__fotografo', 'pedido', 'video'
         ).prefetch_related('pedido__itens')
         
-        # 🚀 CORRIGIDO: Adicionados os nomes corretos que o DateRangeFilter usa
+        # Se NÃO for a página da tabela principal (ex: clicou num item para editar), 
+        # devolve o item normalmente ignorando o bloqueio!
+        if request.resolver_match and request.resolver_match.url_name != 'loja_itempedido_changelist':
+            return qs
+            
         tem_filtro = any(chave in request.GET for chave in (
             'q', 'fotografo_id', 'pedido__status', 
             'pedido__criado_em__range__gte', 'pedido__criado_em__range__lte'

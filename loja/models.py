@@ -85,10 +85,18 @@ class Pedido(models.Model):
 
 class ItemPedido(models.Model):
     pedido = models.ForeignKey(Pedido, on_delete=models.CASCADE, related_name='itens')
-    foto = models.ForeignKey(Foto, on_delete=models.PROTECT, null=True, blank=True) # <-- Alterado
-    video = models.ForeignKey(Video, on_delete=models.PROTECT, null=True, blank=True) # <-- Adicionado
+    foto = models.ForeignKey(Foto, on_delete=models.PROTECT, null=True, blank=True) 
+    video = models.ForeignKey(Video, on_delete=models.PROTECT, null=True, blank=True) 
     preco = models.DecimalField(max_digits=10, decimal_places=2)
     pago_ao_fotografo = models.BooleanField(default=False)
+
+    # 🚀 ADICIONE ESTA FUNÇÃO PARA CORRIGIR O NOME NA TELA
+    def __str__(self):
+        if self.foto:
+            return f"📸 Foto #{self.foto.id}"
+        if self.video:
+            return f"🎥 Vídeo #{self.video.id}"
+        return "⚠️ Item Vazio"
 
 class FotoComprada(models.Model):
     cliente = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name='fotos_compradas')
