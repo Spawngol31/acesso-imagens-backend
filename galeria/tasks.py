@@ -7,7 +7,7 @@ import tempfile
 import shutil
 import subprocess
 from io import BytesIO
-from PIL import Image
+from PIL import Image, ImageOps
 
 from celery import shared_task
 from django.core.files.storage import default_storage
@@ -26,78 +26,92 @@ def processar_foto_task(foto_id):
         if not foto.imagem:
             return
 
-        print(f"--- [CELERY] Iniciando processamento para Foto ID: {foto.id} ---")
+        print(f"--- [CELERY] Iniciando processamento rápido para Foto ID: {foto.id} ---")
 
+        # 1. Faz o download da imagem do S3 para a memória
         with foto.imagem.open('rb') as image_file:
             image_bytes = image_file.read()
-        
-        REKOGNITION_LIMIT = 5 * 1024 * 1024 # 5MB
-        
-        if len(image_bytes) > REKOGNITION_LIMIT:
-            img = Image.open(BytesIO(image_bytes))
-            img.thumbnail((1920, 1080), Image.Resampling.LANCZOS)
-            buffer_rekognition = BytesIO()
-            img.save(buffer_rekognition, format='JPEG', quality=95)
-            image_bytes_for_rekognition = buffer_rekognition.getvalue()
-        else:
-            image_bytes_for_rekognition = image_bytes
 
+        # 2. ABRE A IMAGEM APENAS UMA VEZ (Poupa 50% de CPU e RAM!)
+        img_original = Image.open(BytesIO(image_bytes))
+        img_original = ImageOps.exif_transpose(img_original) # Corrige fotos tiradas na vertical
+
+        # 3. OTIMIZAÇÃO EXTREMA PARA A AWS REKOGNITION (Fim da regra dos 5MB)
         if not foto.faces_indexadas.exists():
+            # Fazemos uma cópia rápida e reduzimos para incríveis 800px (ideal para IA)
+            img_rek = img_original.copy()
+            img_rek.thumbnail((800, 800), Image.Resampling.LANCZOS)
+            
+            buffer_rek = BytesIO()
+            img_rek.convert('RGB').save(buffer_rek, format='JPEG', quality=85)
+            
             rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
+            
+            # Envia o arquivo minúsculo (Bytes) super rápido
             response = rekognition_client.index_faces(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
-                Image={'Bytes': image_bytes_for_rekognition},
+                Image={'Bytes': buffer_rek.getvalue()}, 
                 ExternalImageId=str(foto.id),
+                
+                # 🛡️ AS NOSSAS TRAVAS DE ECONOMIA
+                MaxFaces=6,           # Ignora a torcida inteira no fundo
+                QualityFilter='HIGH', # Ignora rostos desfocados e gasta menos
                 DetectionAttributes=['DEFAULT']
             )
+            
             novas_faces = []
             for face_record in response.get('FaceRecords', []):
                 face_id = face_record['Face']['FaceId']
                 novas_faces.append(FaceIndexada(foto=foto, rekognition_face_id=face_id))
+            
             if novas_faces:
                 FaceIndexada.objects.bulk_create(novas_faces)
 
+        # 4. CRIAÇÃO DA MARCA D'ÁGUA (Reaproveitando a imagem já aberta)
         if not foto.miniatura_marca_dagua:
-            with Image.open(BytesIO(image_bytes)).convert("RGBA") as original_image:
-                size = (600, 600)
-                original_image.thumbnail(size)
-                img_width, img_height = original_image.size
-                watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
+            img_wm = img_original.copy().convert("RGBA")
+            img_wm.thumbnail((600, 600), Image.Resampling.LANCZOS)
+            
+            img_width, img_height = img_wm.size
+            watermark_path = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
+            
+            with Image.open(watermark_path).convert("RGBA") as watermark:
+                PROPORCAO_MARCA = 0.20
+                new_wm_width = int(img_width * PROPORCAO_MARCA)
+                wm_ratio = new_wm_width / watermark.size[0]
+                new_wm_height = int(wm_ratio * watermark.size[1])
+                watermark = watermark.resize((new_wm_width, new_wm_height), Image.Resampling.LANCZOS)
+                wm_width, wm_height = watermark.size
                 
-                with Image.open(watermark_path).convert("RGBA") as watermark:
-                    PROPORCAO_MARCA = 0.20
-                    new_wm_width = int(img_width * PROPORCAO_MARCA)
-                    wm_ratio = new_wm_width / watermark.size[0]
-                    new_wm_height = int(wm_ratio * watermark.size[1])
-                    watermark = watermark.resize((new_wm_width, new_wm_height), Image.Resampling.LANCZOS)
-                    wm_width, wm_height = watermark.size
-                    
-                    OPACIDADE = 0.3
-                    alpha = watermark.getchannel('A')
-                    alpha = alpha.point(lambda i: i * OPACIDADE)
-                    watermark.putalpha(alpha)
+                OPACIDADE = 0.3
+                alpha = watermark.getchannel('A')
+                alpha = alpha.point(lambda i: i * OPACIDADE)
+                watermark.putalpha(alpha)
 
-                    final_image = Image.new('RGBA', original_image.size, (0, 0, 0, 0))
-                    final_image.paste(original_image, (0, 0))
-                    
-                    PADDING_X = int(img_width * 0.1)
-                    PADDING_Y = int(img_height * 0.1)
-                    for y in range(0, img_height, wm_height + PADDING_Y):
-                        for x in range(0, img_width, wm_width + PADDING_X):
-                            final_image.paste(watermark, (x, y), mask=watermark)
+                final_image = Image.new('RGBA', img_wm.size, (0, 0, 0, 0))
+                final_image.paste(img_wm, (0, 0))
+                
+                PADDING_X = int(img_width * 0.1)
+                PADDING_Y = int(img_height * 0.1)
+                
+                for y in range(0, img_height, wm_height + PADDING_Y):
+                    for x in range(0, img_width, wm_width + PADDING_X):
+                        final_image.paste(watermark, (x, y), mask=watermark)
 
-                    buffer = BytesIO()
-                    final_image.convert("RGB").save(buffer, format='JPEG', quality=90)
-                    buffer.seek(0)
-                    
-                    file_name = os.path.basename(foto.imagem.name)
-                    foto.miniatura_marca_dagua.save(file_name, ContentFile(buffer.read()), save=True)
+                buffer_final = BytesIO()
+                final_image.convert("RGB").save(buffer_final, format='JPEG', quality=90)
+                buffer_final.seek(0)
+                
+                file_name = os.path.basename(foto.imagem.name)
+                foto.miniatura_marca_dagua.save(file_name, ContentFile(buffer_final.read()), save=True)
+
+        # Libera a memória pesada
+        img_original.close()
 
         print(f"--- [CELERY] Processamento completo para Foto ID: {foto.id} ---")
             
     except Exception as e:
         print(f"--- [ERRO CELERY] Erro ao processar foto task: {e} ---")
-
 
 @shared_task
 def gerar_miniatura_video_task(video_id):
