@@ -1,4 +1,5 @@
 import boto3
+import time
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 from datetime import timedelta
@@ -28,7 +29,7 @@ class Command(BaseCommand):
         lotes = [lista_rostos[i:i + 1000] for i in range(0, len(lista_rostos), 1000)]
         
         total_apagados = 0
-        for lote in lotes:
+        for index, lote in enumerate(lotes):
             try:
                 response = client.delete_faces(
                     CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
@@ -40,7 +41,12 @@ class Command(BaseCommand):
                 # 4. Remove do banco de dados local para manter a sincronia
                 FaceIndexada.objects.filter(rekognition_face_id__in=lote).delete()
                 
+                self.stdout.write(self.style.SUCCESS(f"Lote {index + 1}/{len(lotes)} limpo..."))
+                
+                # 🚀 2. A MÁGICA: Pausa de 2 segundos para a AWS não bloquear por "excesso de velocidade"
+                time.sleep(2)
+                
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"Erro ao apagar lote na AWS: {str(e)}"))
             
-        self.stdout.write(self.style.SUCCESS(f"Missão Cumprida! {total_apagados} rostos antigos foram excluídos permanentemente da AWS. (Isso reduzirá sua próxima fatura!)"))
+        self.stdout.write(self.style.SUCCESS(f"🗑️ Missão Cumprida! {total_apagados} rostos antigos foram excluídos permanentemente da AWS. (Isso reduzirá sua próxima fatura!)"))
