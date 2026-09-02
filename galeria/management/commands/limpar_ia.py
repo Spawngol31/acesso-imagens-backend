@@ -25,8 +25,9 @@ class Command(BaseCommand):
 
         client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
         
-        # 3. A AWS tem um limite de 4000 apagos por vez. Dividimos a lista em lotes de 1000.
-        lotes = [lista_rostos[i:i + 1000] for i in range(0, len(lista_rostos), 1000)]
+        # 🚀 MÁGICA 1: O máximo que a AWS permite de uma vez são 4000 rostos.
+        # Ao usar 4000, baixamos as requisições de 67 para apenas 17!
+        lotes = [lista_rostos[i:i + 4000] for i in range(0, len(lista_rostos), 4000)]
         
         total_apagados = 0
         for index, lote in enumerate(lotes):
@@ -38,15 +39,17 @@ class Command(BaseCommand):
                 apagados_no_lote = len(response.get('DeletedFaces', []))
                 total_apagados += apagados_no_lote
                 
-                # 4. Remove do banco de dados local para manter a sincronia
+                # Remove do banco de dados local para manter a sincronia
                 FaceIndexada.objects.filter(rekognition_face_id__in=lote).delete()
                 
-                self.stdout.write(self.style.SUCCESS(f"Lote {index + 1}/{len(lotes)} limpo..."))
+                self.stdout.write(self.style.SUCCESS(f"Lote {index + 1}/{len(lotes)} limpo com sucesso..."))
                 
-                # 🚀 2. A MÁGICA: Pausa de 2 segundos para a AWS não bloquear por "excesso de velocidade"
-                time.sleep(2)
+                # 🚀 MÁGICA 2: Descanso maior entre os super-lotes (5 segundos)
+                time.sleep(5)
                 
             except Exception as e:
                 self.stdout.write(self.style.ERROR(f"Erro ao apagar lote na AWS: {str(e)}"))
+                # Se ainda assim der erro, descansa mais tempo (10 seg) e avança para o próximo
+                time.sleep(10)
             
-        self.stdout.write(self.style.SUCCESS(f"🗑️ Missão Cumprida! {total_apagados} rostos antigos foram excluídos permanentemente da AWS. (Isso reduzirá sua próxima fatura!)"))
+        self.stdout.write(self.style.SUCCESS(f"🗑️ Missão Cumprida! {total_apagados} rostos antigos foram excluídos permanentemente da AWS."))
