@@ -212,7 +212,7 @@ class PropostaCompraSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'cliente', 'cliente_nome', 'cliente_email', 
             'album', 'album_titulo', 'quantidade_fotos', 'quantidade_videos', 
-            'valor_oferecido', 'valor_contraproposta', 'status', 'criado_em'
+            'valor_oferecido', 'valor_contraproposta', 'comentario', 'status', 'criado_em'
         ]
         read_only_fields = ['id', 'cliente', 'status', 'criado_em']
 

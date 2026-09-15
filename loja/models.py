@@ -186,6 +186,7 @@ class PropostaCompra(models.Model):
     # Valores da negociação
     valor_oferecido = models.DecimalField("Valor Oferecido (R$)", max_digits=10, decimal_places=2)
     valor_contraproposta = models.DecimalField("Contra-proposta (R$)", max_digits=10, decimal_places=2, null=True, blank=True)
+    comentario = models.TextField("Comentário do Cliente", null=True, blank=True, help_text="Mensagem opcional do cliente para o fotógrafo")
     
     status = models.CharField(max_length=30, choices=STATUS_CHOICES, default='PENDENTE')
     criado_em = models.DateTimeField(auto_now_add=True)

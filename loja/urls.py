@@ -7,7 +7,8 @@ from .views import (
     MercadoPagoCheckoutView,
     MercadoPagoProcessPaymentView, 
     MercadoPagoWebhookView, 
-    MinhasComprasView, 
+    MinhasComprasView,
+    MinhasComprasAbertasView, 
     DownloadFotoView,
     EnviarFotoEmailView,
     VendasFotografoView, 
@@ -31,7 +32,8 @@ from .views import (
     FotografoSolicitacaoSaqueView,
     RankingAlbunsFotografoView,
     RankingAlbunsAdminView,
-    AdminSolicitacaoSaqueView
+    AdminSolicitacaoSaqueView,
+    RetomarCompraView
 )
 
 # --- Cria um roteador para as ViewSets do dashboard deste app ---
@@ -52,6 +54,8 @@ urlpatterns = [
     path('minhas-propostas/', ClientePropostasView.as_view(), name='cliente-propostas'),
     path('minhas-propostas/<int:pk>/<str:acao>/', ClienteResponderContrapropostaView.as_view(), name='responder-contraproposta'),
     path('minhas-compras/', MinhasComprasView.as_view(), name='minhas-compras'),
+    path('minhas-compras-abertas/', MinhasComprasAbertasView.as_view(), name='minhas-compras-abertas'),
+    path('compras/<int:pk>/retomar/', RetomarCompraView.as_view(), name='retomar-compra'),
     path('download-foto/<int:foto_id>/', DownloadFotoView.as_view(), name='download-foto'),
     path('download-foto/<int:foto_id>/enviar-email/', EnviarFotoEmailView.as_view(), name='enviar_foto_email'),
     path('download-fotos-zip/', BulkDownloadFotosZipView.as_view(), name='bulk-download-zip'),

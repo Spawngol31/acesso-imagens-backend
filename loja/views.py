@@ -5,6 +5,7 @@ import csv
 import io
 import json
 import os
+import uuid
 import zipfile
 from datetime import timedelta
 from decimal import Decimal
@@ -336,7 +337,97 @@ class MinhasComprasView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, IsCliente]
 
     def get_queryset(self):
-        return Pedido.objects.filter(cliente=self.request.user, status=Pedido.StatusPedido.PAGO).order_by('-criado_em')
+        # Traz APENAS pedidos pagos
+        return Pedido.objects.filter(
+            cliente=self.request.user, 
+            status=Pedido.StatusPedido.PAGO
+        ).order_by('-criado_em')
+
+class MinhasComprasAbertasView(generics.ListAPIView):
+    serializer_class = PedidoSerializer
+    permission_classes = [IsAuthenticated, IsCliente]
+
+    def get_queryset(self):
+        # Traz pedidos que NÃO ESTÃO pagos (ex: Pendente, Aguardando, etc)
+        # Assumindo que o seu status é PAGO, filtramos tudo o que é diferente (!=) de PAGO.
+        # Se você tiver status como CANCELADO, você pode excluir esses com .exclude(status=Pedido.StatusPedido.CANCELADO)
+        return Pedido.objects.filter(
+            cliente=self.request.user
+        ).exclude(
+            status=Pedido.StatusPedido.PAGO
+        ).order_by('-criado_em')
+
+class RetomarCompraView(APIView):
+    permission_classes = [IsAuthenticated, IsCliente]
+
+    def get(self, request, pk):
+        try:
+            # Tenta encontrar o pedido garantindo que pertence ao utilizador logado
+            pedido = Pedido.objects.get(pk=pk, cliente=request.user)
+        except Pedido.DoesNotExist:
+            return Response({"error": "Pedido não encontrado ou não lhe pertence."}, status=status.HTTP_404_NOT_FOUND)
+
+        # Se a compra já estiver paga, não faz sentido gerar novo pagamento
+        if pedido.status == Pedido.StatusPedido.PAGO:
+            return Response({"error": "Esta compra já se encontra finalizada."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Recria os itens para enviar ao Mercado Pago
+        itens_do_pedido = []
+        for item in pedido.itens.all():
+            if item.foto:
+                titulo_mp = f"Foto ID: {item.foto.id}"
+            elif item.video:
+                titulo_mp = f"Vídeo ID: {item.video.id}"
+            else:
+                continue
+
+            itens_do_pedido.append({
+                "title": titulo_mp,
+                "quantity": 1,
+                "unit_price": float(item.preco),
+                "currency_id": "BRL"
+            })
+
+        # 2. Inicializa o Mercado Pago
+        if not hasattr(settings, 'MP_ACCESS_TOKEN') or not settings.MP_ACCESS_TOKEN:
+            return Response({"error": "Erro no servidor de pagamentos."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        sdk = mercadopago.SDK(settings.MP_ACCESS_TOKEN)
+
+        # 3. Cria a nova preferência de pagamento
+        preference_data = {
+            "items": itens_do_pedido,
+            "payer": {
+                "name": request.user.nome_completo,
+                "email": request.user.email,
+            },
+            "back_urls": {
+                "success": f"{settings.FRONTEND_URL}/minhas-compras",
+                "failure": f"{settings.FRONTEND_URL}/carrinho",
+                "pending": f"{settings.FRONTEND_URL}/minhas-compras"
+            },
+            "external_reference": str(pedido.id),
+            "notification_url": f"{settings.BACKEND_URL}/api/webhooks/mp/",
+        }
+
+        try:
+            preference_response = sdk.preference().create(preference_data)
+            
+            if preference_response.get("status") not in [200, 201]:
+                return Response({"error": "Mercado Pago recusou a conexão."}, status=status.HTTP_502_BAD_GATEWAY)
+
+            preference = preference_response["response"]
+
+            # 4. Devolve os dados para o React (o CheckoutPage está à espera disto)
+            return Response({
+                "preference_id": preference["id"],
+                "order_id": str(pedido.id),
+                "total": float(pedido.valor_total)
+            })
+
+        except Exception as e:
+            print(f"ERRO AO RETOMAR COMPRA: {str(e)}")
+            return Response({'error': f"Erro no servidor: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class DownloadFotoView(APIView):
     permission_classes = [IsAuthenticated, IsCliente]
@@ -354,13 +445,20 @@ class DownloadFotoView(APIView):
             
             s3_client = boto3.client('s3', aws_access_key_id=settings.AWS_ACCESS_KEY_ID, aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, region_name=settings.AWS_S3_REGION_NAME, config=boto3.session.Config(signature_version='s3v4'))
             file_name = os.path.basename(full_key)
-            params = {'Bucket': settings.AWS_STORAGE_BUCKET_NAME, 'Key': full_key, 'ResponseContentDisposition': f'attachment; filename="{file_name}"'}
+            
+            # FORÇAR HEADERS HTTP DE DOWNLOAD
+            params = {
+                'Bucket': settings.AWS_STORAGE_BUCKET_NAME, 
+                'Key': full_key, 
+                'ResponseContentDisposition': f'attachment; filename="{file_name}"',
+                'ResponseContentType': 'application/octet-stream' # 🚀 Força o download no Android/iOS
+            }
             download_url = s3_client.generate_presigned_url('get_object', Params=params, ExpiresIn=300)
             return Response({'download_url': download_url})
         except Exception as e:
             print(f"ERRO ao gerar URL de download: {e}")
             return Response({"error": "Erro ao gerar link de download."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
+        
 class EnviarFotoEmailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -426,7 +524,6 @@ class BulkDownloadFotosZipView(APIView):
         if not foto_ids:
             return Response({"error": "Nenhuma foto selecionada."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 1. MÁGICA 1: Pega APENAS OS IDs ÚNICOS (Evita baixar a mesma foto 2x se ele comprou duplicado)
         fotos_compradas_ids = FotoComprada.objects.filter(
             cliente=request.user, 
             foto_id__in=foto_ids, 
@@ -436,7 +533,6 @@ class BulkDownloadFotosZipView(APIView):
         if not fotos_compradas_ids:
             return Response({"error": "Nenhuma das fotos solicitadas é válida ou pertence a você."}, status=status.HTTP_403_FORBIDDEN)
 
-        # 2. Busca as fotos reais, de forma única
         fotos_para_baixar = Foto.objects.filter(id__in=fotos_compradas_ids)
 
         try:
@@ -450,14 +546,13 @@ class BulkDownloadFotosZipView(APIView):
             bucket_name = settings.AWS_STORAGE_BUCKET_NAME
 
             zip_buffer = io.BytesIO()
-            fotos_adicionadas = 0 # Contador para sabermos se deu tudo certo
+            fotos_adicionadas = 0 
 
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for foto in fotos_para_baixar:
                     relative_path = foto.imagem.name
                     storage_location = foto.imagem.storage.location
                     full_key = f"{storage_location}/{relative_path}"
-                    
                     file_name = f"acesso_imagens_foto_{foto.id}_{os.path.basename(full_key)}"
 
                     try:
@@ -466,7 +561,6 @@ class BulkDownloadFotosZipView(APIView):
                         zip_file.writestr(file_name, foto_content)
                         fotos_adicionadas += 1
                     except Exception as e:
-                        # MÁGICA 2: Agora ele te avisa no terminal se a foto sumiu do S3!
                         print(f"⚠️ ERRO S3 - A foto {foto.id} falhou ou sumiu do bucket: {e}")
                         continue
 
@@ -474,16 +568,32 @@ class BulkDownloadFotosZipView(APIView):
                 return Response({"error": "Nenhuma imagem foi encontrada no servidor AWS."}, status=status.HTTP_404_NOT_FOUND)
 
             zip_buffer.seek(0)
-            response = HttpResponse(zip_buffer, content_type='application/zip')
-            response['Content-Disposition'] = f'attachment; filename="acesso_imagens_pacote_{timezone.now().strftime("%Y%m%d%H%M")}.zip"'
             
-            return response
+            # 🚀 MÁGICA: Sobe o ZIP gerado para a AWS temporariamente
+            zip_filename = f"pacotes_zip/acesso_imagens_cliente_{request.user.id}_{uuid.uuid4().hex[:8]}.zip"
+            
+            s3_client.upload_fileobj(
+                zip_buffer, 
+                bucket_name, 
+                zip_filename,
+                ExtraArgs={'ContentType': 'application/zip'}
+            )
+
+            # 🚀 Gera o Link Assinado igual ao das fotos individuais
+            params = {
+                'Bucket': bucket_name, 
+                'Key': zip_filename, 
+                'ResponseContentDisposition': f'attachment; filename="acesso_imagens_pacote_{timezone.now().strftime("%Y%m%d%H%M")}.zip"',
+                'ResponseContentType': 'application/octet-stream' # Força o download
+            }
+            download_url = s3_client.generate_presigned_url('get_object', Params=params, ExpiresIn=3600)
+            
+            # Devolve a URL em vez do binário!
+            return Response({"download_url": download_url}, status=status.HTTP_200_OK)
 
         except Exception as e:
             print(f"ERRO CRÍTICO ao gerar ZIP: {e}")
             return Response({"error": "Erro no servidor ao gerar o pacote ZIP."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
-
 class BulkEnviarFotosEmailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -1410,15 +1520,32 @@ class RankingAlbunsAdminView(APIView):
     permission_classes = [IsAuthenticated, IsAdminUser]
 
     def get(self, request):
-        ranking = ItemPedido.objects.filter(
-            pedido__status=Pedido.StatusPedido.PAGO
-        ).values(
+        periodo = request.query_params.get('periodo', 'todos')
+        hoje = timezone.now()
+
+        # 1. Filtro base: apenas pedidos pagos
+        queryset = ItemPedido.objects.filter(pedido__status=Pedido.StatusPedido.PAGO)
+
+        # 2. Filtro de data baseado no parâmetro escolhido
+        # NOTA: Assumi que o campo de data no seu model Pedido se chama 'criado_em'. 
+        # Se for 'data', 'data_pedido', etc., basta alterar abaixo de 'pedido__criado_em' para o nome correto.
+        if periodo == 'diario':
+            queryset = queryset.filter(pedido__criado_em__date=hoje.date())
+        elif periodo == 'semanal':
+            queryset = queryset.filter(pedido__criado_em__gte=hoje - timedelta(days=7))
+        elif periodo == 'mensal':
+            queryset = queryset.filter(pedido__criado_em__year=hoje.year, pedido__criado_em__month=hoje.month)
+        elif periodo == 'anual':
+            queryset = queryset.filter(pedido__criado_em__year=hoje.year)
+
+        # 3. Agrupa os resultados já filtrados pela data
+        ranking = queryset.values(
             album_id=F('foto__album__id'),
             album_titulo=F('foto__album__titulo'),
             fotografo_nome=F('foto__album__fotografo__nome_completo')
         ).annotate(
             total_arrecadado=Sum('preco'),
             qtd_vendida=Count('id')
-        ).order_by('-total_arrecadado')[:10] # Traz os 10 melhores gerais
+        ).order_by('-total_arrecadado')[:10]
 
         return Response(ranking)
