@@ -52,7 +52,12 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'galeria.middleware.NotificacaoBugMiddleware',
 ]
+
+# --- ALERTA DE BUGS ---
+# Cole aqui o URL que o Discord lhe vai dar:
+DISCORD_WEBHOOK_URL = 'https://discord.com/api/webhooks/1551020241604186152/bQllt4opgqj5f6OWIbRrKk_TxeT5iyzMV97VnTisThGEzfksFdezmeGcNfvkgLEueYJE'
 
 ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
@@ -208,19 +213,19 @@ CELERY_BROKER_URL = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
 CELERY_IGNORE_RESULT = True
 
 # 2. FILA INDIANA E PREVENÇÃO DE TRAVAMENTOS (OOM - Out of Memory)
-# Diz ao worker para pegar estritamente 1 tarefa de cada vez.
-# Isso impede que ele tente abraçar o mundo e travar a RAM do servidor de 2GB.
-CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+# 🚀 ALTERAÇÃO: Como você agora tem 4GB de RAM na Hetzner, podemos aumentar 
+# de 1 para 2 ou 3 tarefas por worker. Isso acelera drasticamente a fila sem explodir a memória.
+CELERY_WORKER_PREFETCH_MULTIPLIER = 2 
 
-# 3. RECUPERAÇÃO DE FALHAS
+# 3. RECUPERAÇÃO DE FALHAS E PROCESSAMENTO LONGO
 # Se o servidor cair, reiniciar ou faltar RAM a meio de um processamento,
 # o Celery NÃO marca a tarefa como concluída. A foto volta para a fila!
 CELERY_ACKS_LATE = True
 
-# 4. TIMEOUTS E LIMPEZA
-# Se uma foto demorar mais de 15 minutos a processar, algo correu mal.
-# Ele aborta e devolve à fila.
-broker_transport_options = {'visibility_timeout': 900}
+# 🚀 ALTERAÇÃO: Como o Celery agora precisa baixar a foto do S3 antes de colocar 
+# a marca d'água, vamos aumentar o tempo de tolerância para 30 minutos (1800 segundos),
+# garantindo que fotos gigantes ou vídeos não geram erros de timeout.
+broker_transport_options = {'visibility_timeout': 1800}
 
 # Formato padrão de envio de mensagens
 CELERY_ACCEPT_CONTENT = ['json']
@@ -228,3 +233,4 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 
 X_FRAME_OPTIONS = 'SAMEORIGIN'
+

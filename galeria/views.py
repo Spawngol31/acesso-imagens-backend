@@ -2,6 +2,7 @@
 
 import boto3
 import uuid
+import os
 from django.db.models import Sum, Count, Q, Value
 from django.db.models.functions import Coalesce
 from django.core.files.base import ContentFile
@@ -110,7 +111,7 @@ class BuscaFacialView(APIView):
             rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
             response = rekognition_client.search_faces_by_image(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
-                Image={'Bytes': image_bytes}, # <--- CORREÇÃO AQUI
+                Image={'Bytes': image_bytes},
                 MaxFaces=5, FaceMatchThreshold=95
             )
             
@@ -124,14 +125,12 @@ class BuscaFacialView(APIView):
             
             # 4. AQUI APLICAMOS O FILTRO DE ÁLBUM!
             if album_id:
-                # Se enviou album_id, filtra apenas as fotos desse álbum
                 fotos = Foto.objects.filter(
                     id__in=fotos_encontradas_ids, 
-                    album_id=album_id, # <--- FILTRA AQUI
+                    album_id=album_id,
                     is_arquivado=False
                 )
             else:
-                # Se não enviou (Busca Global), filtra no site todo (álbuns públicos e não arquivados)
                 fotos = Foto.objects.filter(
                     id__in=fotos_encontradas_ids, 
                     is_arquivado=False, 
@@ -145,25 +144,84 @@ class BuscaFacialView(APIView):
         except Exception as e:
             print(f"Erro na busca facial: {e}")
             return Response({"error": "Ocorreu um erro durante a busca facial."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
 # =========================================================================================
-# 🚀 LÓGICA DE UPLOAD REVOLUCIONADA (Site vs FTP)
+# 🚀 DIRECT-TO-S3 (FASE 2)
 # =========================================================================================
 
+class GeneratePresignedUrlView(APIView):
+    """
+    Gera a URL segura para o React fazer upload direto para a AWS/Cloudflare.
+    Assim o seu servidor Hetzner não recebe os arquivos pesados.
+    """
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
+
+    def post(self, request):
+        file_name = request.data.get('file_name')
+        content_type = request.data.get('content_type')
+        tipo_arquivo = request.data.get('tipo', 'foto') # 'foto' ou 'video'
+        
+        if not file_name:
+            return Response({'error': 'file_name obrigatório.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Trata o nome do ficheiro e gera um identificador único
+        ext = os.path.splitext(file_name)[1].lower()
+        uuid_hex = uuid.uuid4().hex
+        
+        # Decide a pasta destino na S3 (media_private para garantir segurança)
+        if tipo_arquivo == 'video':
+            unique_file_key = f"media_private/videos/{uuid_hex}{ext}"
+        else:
+            # Assumimos que é foto por padrão
+            unique_file_key = f"media_private/fotos/{uuid_hex}{ext}"
+
+        s3_client = boto3.client(
+            's3',
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_S3_REGION_NAME,
+            config=boto3.session.Config(signature_version='s3v4')
+        )
+
+        presigned_url = s3_client.generate_presigned_url(
+            'put_object',
+            Params={
+                'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+                'Key': unique_file_key,
+                'ContentType': content_type,
+            },
+            ExpiresIn=3600 # 1 hora para o upload
+        )
+
+        return Response({
+            'presigned_url': presigned_url,
+            'file_key': unique_file_key
+        })
+
 class FotoUploadView(APIView):
+    """
+    O React agora chama esta View APENAS depois de a foto já estar na S3.
+    O nosso trabalho aqui é só gravar no Banco de Dados em milissegundos.
+    """
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def post(self, request, *args, **kwargs):
         destino = request.data.get('destino_upload', 'site')
         jornais_string = request.data.get('jornais')
-        imagem_file = request.FILES.get('imagem')
         
-        # 1. Coleta os metadados IPTC enviados pelo React
+        # O React agora envia o caminho onde salvou a foto na nuvem
+        file_key = request.data.get('file_key') 
+        album_id = request.data.get('album')
+        
+        if not file_key:
+            return Response({'error': 'O React não informou onde guardou a foto na S3.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 1. Coleta metadados
         metadados = {
             'titulo': request.data.get('ftp_titulo', ''),
             'data': request.data.get('ftp_data', ''),
             'local': request.data.get('ftp_local', ''),
-            'legenda': request.data.get('ftp_legenda', ''),
+            'legenda': request.data.get('legenda', ''),
             'creditos': request.data.get('ftp_creditos', ''),
             'categoria': request.data.get('categoria', '')
         }
@@ -172,63 +230,74 @@ class FotoUploadView(APIView):
         if jornais_string:
             jornais_ids = [int(id_str.strip()) for id_str in jornais_string.split(',') if id_str.strip().isdigit()]
 
-        # --- CENÁRIO 1: APENAS SITE ou AMBOS ---
-        # Se for para o site, temos de validar o preço e gravar no banco de dados.
-        if destino in ['site', 'ambos']:
-            serializer = FotoUploadSerializer(data=request.data, context={'request': request})
-            if serializer.is_valid():
-                foto = serializer.save()
+        try:
+            # --- CENÁRIO 1: APENAS SITE ou AMBOS ---
+            if destino in ['site', 'ambos']:
+                
+                # Vamos remover o prefixo 'media_private/' se o seu banco guarda sem ele,
+                # ou manter como está dependendo da sua formatação do FileField
+                path_bd = file_key.replace('media_private/', '')
+                
+                # Criar logo no Banco de Dados! Muito Rápido!
+                foto = Foto.objects.create(
+                    album_id=album_id,
+                    imagem=path_bd, 
+                    preco=request.data.get('preco', 0),
+                    legenda=request.data.get('legenda', ''),
+                    categoria=request.data.get('categoria', '')
+                )
                 
                 # Se for "ambos", dispara o FTP usando a foto salva
                 if destino == 'ambos' and jornais_ids:
-                    print(f"--- Disparando FTP (Ambos) para {jornais_ids} com metadados ---")
-                    # ⚠️ ATENÇÃO: Passamos os 'metadados' como terceiro argumento para o celery
                     distribuir_foto_para_ftps.delay(foto.id, jornais_ids, metadados)
-                    
-                return Response(serializer.data, status=status.HTTP_201_CREATED)
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                
+                # Como criamos a Foto diretamente, o Django dispara os signals 
+                # (ou processamento do Celery) de forma automática.
+                return Response({'status': 'Gravado no Banco com Sucesso', 'foto_id': foto.id}, status=status.HTTP_201_CREATED)
 
-        # --- CENÁRIO 2: APENAS FTP (Não salva no Site/Banco de Dados) ---
-        elif destino == 'ftp':
-            if not jornais_ids or not imagem_file:
-                return Response({'error': 'Faltam jornais ou imagem para envio FTP.'}, status=status.HTTP_400_BAD_REQUEST)
+            # --- CENÁRIO 2: APENAS FTP (Não salva no Banco) ---
+            elif destino == 'ftp':
+                if not jornais_ids:
+                    return Response({'error': 'Faltam jornais para FTP.'}, status=status.HTTP_400_BAD_REQUEST)
+                
+                # O React mandou o ficheiro direto para o file_key. Disparar FTP:
+                distribuir_foto_temporaria_ftp.delay(file_key, jornais_ids, metadados)
+                return Response({'status': 'Enviado direto para o Jornal!'}, status=status.HTTP_200_OK)
+                
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-            try:
-                # Upload direto para uma pasta temporária na AWS S3
-                s3_client = boto3.client(
-                    's3', 
-                    aws_access_key_id=settings.AWS_ACCESS_KEY_ID, 
-                    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
-                    region_name=settings.AWS_S3_REGION_NAME,
-                    config=boto3.session.Config(signature_version='s3v4')
-                )
-                
-                temp_key = f"tmp_ftp/{uuid.uuid4().hex}_{imagem_file.name}"
-                s3_client.upload_fileobj(imagem_file, settings.AWS_STORAGE_BUCKET_NAME, temp_key)
-                
-                print(f"--- Disparando FTP Temporário para {jornais_ids} com metadados ---")
-                
-                # 🚀 AGORA SIM! Enviamos a ordem real para o Celery fazer o trabalho em segundo plano:
-                distribuir_foto_temporaria_ftp.delay(temp_key, jornais_ids, metadados)
+class VideoUploadDashboardView(APIView):
+    """
+    Versão Direct-to-S3 para Vídeos. Salva apenas o registo após o React confirmar o upload.
+    """
+    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
-                return Response({'status': 'Foto enviada direto para os jornais com sucesso!'}, status=status.HTTP_200_OK)
-                
-            except Exception as e:
-                print(f"Erro no upload temporário FTP: {e}")
-                return Response({'error': 'Erro ao processar arquivo FTP.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    def post(self, request, *args, **kwargs):
+        file_key = request.data.get('file_key')
+        album_id = request.data.get('album')
+
+        if not file_key:
+            return Response({'error': 'file_key obrigatorio para videos.'}, status=status.HTTP_400_BAD_REQUEST)
+            
+        try:
+            path_bd = file_key.replace('media_private/', '')
+            
+            video = Video.objects.create(
+                album_id=album_id,
+                arquivo_video=path_bd,
+                titulo=request.data.get('titulo', ''),
+                preco=request.data.get('preco', 0),
+                categoria=request.data.get('categoria', '')
+            )
+            
+            # O processamento pesado (criar miniatura) é delegado aos signals ou celery
+            return Response({'status': 'Vídeo guardado com sucesso', 'video_id': video.id}, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 # =========================================================================================
 
-class VideoUploadDashboardView(generics.CreateAPIView):
-    queryset = Video.objects.all()
-    serializer_class = VideoUploadSerializer
-    permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
-
-    def perform_create(self, serializer):
-        # 1. O Django salva o vídeo original no banco de dados.
-        # Não precisamos mais chamar o .delay() aqui porque o signals.py já fará isso!
-        serializer.save()
-        
 class AlbumViewSet(viewsets.ModelViewSet):
     serializer_class = AlbumDashboardSerializer
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
@@ -240,12 +309,12 @@ class AlbumViewSet(viewsets.ModelViewSet):
 
         return queryset.annotate(
             qtd_vendida=Count(
-                'fotos__itempedido', # <-- Corrigido aqui (usando o nome do model em minúsculas)
+                'fotos__itempedido',
                 filter=Q(fotos__itempedido__pedido__status='PAGO')
             ),
             total_arrecadado=Coalesce(
                 Sum(
-                    'fotos__itempedido__preco', # <-- Corrigido aqui
+                    'fotos__itempedido__preco',
                     filter=Q(fotos__itempedido__pedido__status='PAGO')
                 ), 
                 Value(Decimal('0.00'))
@@ -339,9 +408,6 @@ class FotoViewSet(viewsets.ModelViewSet):
         foto.save()
         return Response({'status': 'foto desarquivada'})
 
-    # =========================================================
-    # NOVA OPÇÃO: BAIXAR FOTO ORIGINAL
-    # =========================================================
     @action(detail=True, methods=['get'])
     def baixar_original(self, request, pk=None):
         foto = self.get_object() 
@@ -353,20 +419,16 @@ class FotoViewSet(viewsets.ModelViewSet):
             region_name=settings.AWS_S3_REGION_NAME
         )
         
-        # 1. Pega o nome como está no banco de dados (ex: 'fotos/imagem.jpg')
         caminho_banco = foto.imagem.name
         nome_arquivo = caminho_banco.split('/')[-1]
         
-        # 2. Adiciona o prefixo exato que vimos na sua AWS S3
-        # Removemos barras duplicadas caso a string já venha com barra no início
         caminho_s3 = f"media_private/{caminho_banco}".replace('//', '/')
         
-        # Gera o link seguro direto da AWS que força o download
         url = s3_client.generate_presigned_url(
             ClientMethod='get_object',
             Params={
                 'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
-                'Key': caminho_s3, # Agora sim, apontando para s3://.../media_private/fotos/...
+                'Key': caminho_s3,
                 'ResponseContentDisposition': f'attachment; filename="{nome_arquivo}"'
             },
             ExpiresIn=3600
@@ -422,20 +484,14 @@ def album_share_preview(request, pk):
 # VIEWS DE AVALIAÇÕES (GOOGLE REVIEWS)
 # ==========================================
 
-# Rota Pública para a Home Page
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def avaliacoes_destaques(request):
-    # Puxa apenas as avaliações ativas para a Home, ordenadas pelas mais recentes
     avaliacoes = Avaliacao.objects.filter(mostrar_na_home=True).order_by('-criado_em')
     serializer = AvaliacaoSerializer(avaliacoes, many=True)
     return Response(serializer.data)
 
-# ViewSet para o Painel Admin (Criar, Editar, Excluir, Listar tudo)
 class AvaliacaoViewSet(viewsets.ModelViewSet):
     queryset = Avaliacao.objects.all().order_by('-criado_em')
     serializer_class = AvaliacaoSerializer
-    
-    # Aqui garantimos que só utilizadores logados (Admin) podem gerir as avaliações
-    # Se tiver uma permissão específica de Admin (ex: IsAdminUser), pode usá-la aqui.
     permission_classes = [IsAuthenticated, IsAdminUser]

@@ -6,6 +6,7 @@ from .views import (
     AlbumListView, 
     AlbumDetailView, 
     BuscaFacialView,
+    GeneratePresignedUrlView, # 🚀 NOVA IMPORTAÇÃO
     FotoUploadView,
     VideoUploadDashboardView,
     AlbumViewSet,
@@ -37,9 +38,14 @@ urlpatterns = [
     # ROTA DE COMPARTILHAMENTO
     path('share/album/<int:pk>/', album_share_preview, name='album-share'),
     
+    # 🚀 ROTAS PARA UPLOAD DIRECT-TO-S3 (Fase 2)
+    path('dashboard/get-presigned-url/', GeneratePresignedUrlView.as_view(), name='get-presigned-url'),
+    
     # URLs do Painel (para fotógrafos/admins)
+    # Reutilizamos os nomes antigos para não quebrar nada, mas agora eles só CONFIRMAM a foto que já está no S3
     path('fotos/upload/', FotoUploadView.as_view(), name='foto-upload'),
     path('dashboard/videos/upload/', VideoUploadDashboardView.as_view(), name='video-upload'),
+    
     path('dashboard/status-fila/', StatusFilaProcessamentoView.as_view(), name='status-fila'),
     
     path('dashboard/', include(dashboard_router.urls)),
