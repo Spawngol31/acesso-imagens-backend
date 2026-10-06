@@ -1,4 +1,3 @@
-# galeria/tasks.py
 import ftplib
 import os
 import boto3
@@ -8,6 +7,7 @@ import shutil
 import subprocess
 from io import BytesIO
 from PIL import Image, ImageOps
+from django.db.models import Q
 
 from celery import shared_task
 from django.core.files.storage import default_storage
@@ -15,6 +15,7 @@ from django.conf import settings
 from django.core.files.base import ContentFile
 from .models import Foto, FaceIndexada, Video 
 from contas.models import JornalParceiro
+from loja.models import ItemPedido
 
 # ====================================================================
 # TAREFA DE PROCESSAMENTO BÁSICO (Redimensionar, Rekognition, Marca d'água)
@@ -28,34 +29,36 @@ def processar_foto_task(foto_id):
 
         print(f"--- [CELERY] Iniciando processamento rápido para Foto ID: {foto.id} ---")
 
-        # 1. Faz o download da imagem do S3 para a memória
+        # 1. Faz o download da imagem do Cloudflare R2 para a memória
         with foto.imagem.open('rb') as image_file:
             image_bytes = image_file.read()
 
-        # 2. ABRE A IMAGEM APENAS UMA VEZ (Poupa 50% de CPU e RAM!)
+        # 2. ABRE A IMAGEM APENAS UMA VEZ
         img_original = Image.open(BytesIO(image_bytes))
-        img_original = ImageOps.exif_transpose(img_original) # Corrige fotos tiradas na vertical
+        img_original = ImageOps.exif_transpose(img_original) 
 
-        # 3. OTIMIZAÇÃO EXTREMA PARA A AWS REKOGNITION (Fim da regra dos 5MB)
+        # 3. OTIMIZAÇÃO EXTREMA PARA A AWS REKOGNITION
         if not foto.faces_indexadas.exists():
-            # Fazemos uma cópia rápida e reduzimos para incríveis 800px (ideal para IA)
             img_rek = img_original.copy()
             img_rek.thumbnail((800, 800), Image.Resampling.LANCZOS)
             
             buffer_rek = BytesIO()
             img_rek.convert('RGB').save(buffer_rek, format='JPEG', quality=85)
             
-            rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
+            # 🚨 MUDANÇA 1: Forçar o Rekognition a usar as credenciais específicas da AWS
+            rekognition_client = boto3.client(
+                'rekognition', 
+                aws_access_key_id=settings.AWS_REKOGNITION_ACCESS_KEY_ID,
+                aws_secret_access_key=settings.AWS_REKOGNITION_SECRET_ACCESS_KEY,
+                region_name=settings.AWS_REKOGNITION_REGION_NAME
+            )
             
-            # Envia o arquivo minúsculo (Bytes) super rápido
             response = rekognition_client.index_faces(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
                 Image={'Bytes': buffer_rek.getvalue()}, 
                 ExternalImageId=str(foto.id),
-                
-                # 🛡️ AS NOSSAS TRAVAS DE ECONOMIA
-                MaxFaces=6,           # Ignora a torcida inteira no fundo
-                QualityFilter='HIGH', # Ignora rostos desfocados e gasta menos
+                MaxFaces=6,           
+                QualityFilter='HIGH', 
                 DetectionAttributes=['DEFAULT']
             )
             
@@ -67,7 +70,7 @@ def processar_foto_task(foto_id):
             if novas_faces:
                 FaceIndexada.objects.bulk_create(novas_faces)
 
-        # 4. CRIAÇÃO DA MARCA D'ÁGUA (Reaproveitando a imagem já aberta)
+        # 4. CRIAÇÃO DA MARCA D'ÁGUA 
         if not foto.miniatura_marca_dagua:
             img_wm = img_original.copy().convert("RGBA")
             img_wm.thumbnail((600, 600), Image.Resampling.LANCZOS)
@@ -105,9 +108,7 @@ def processar_foto_task(foto_id):
                 file_name = os.path.basename(foto.imagem.name)
                 foto.miniatura_marca_dagua.save(file_name, ContentFile(buffer_final.read()), save=True)
 
-        # Libera a memória pesada
         img_original.close()
-
         print(f"--- [CELERY] Processamento completo para Foto ID: {foto.id} ---")
             
     except Exception as e:
@@ -161,7 +162,6 @@ def processar_preview_video(video_id):
     try:
         video = Video.objects.get(id=video_id)
         
-        # 1. Cria arquivos temporários para baixar da AWS S3
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as temp_original:
             caminho_original = temp_original.name
             with video.arquivo_video.open('rb') as s3_video_file:
@@ -172,29 +172,22 @@ def processar_preview_video(video_id):
         caminho_preview_temp = os.path.join(settings.MEDIA_ROOT, 'temp', nome_preview)
         os.makedirs(os.path.dirname(caminho_preview_temp), exist_ok=True)
         
-        # =================================================================
-        # NOVA LÓGICA: Criar um "Lençol" gigante com a Marca d'Água (PIL)
-        # =================================================================
         caminho_marca_dagua = os.path.join(settings.STATIC_ROOT, 'watermark.PNG')
         caminho_wm_tiled = os.path.join(settings.MEDIA_ROOT, 'temp', f'wm_tiled_{video_id}.png')
         
         with Image.open(caminho_marca_dagua).convert("RGBA") as wm:
-            # Reduz a marca original (pode ajustar esse valor '180' se quiser maior/menor)
             nova_largura = 120
             ratio = nova_largura / wm.size[0]
             nova_altura = int(wm.size[1] * ratio)
             wm = wm.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
             
-            # Aplica opacidade de 50% (idêntico ao que você faz nas fotos)
             alpha = wm.getchannel('A')
             alpha = alpha.point(lambda i: i * 0.50)
             wm.putalpha(alpha)
             
-            # Cria um canvas gigante transparente de 2000x2000
             canvas_size = 2000
             canvas = Image.new('RGBA', (canvas_size, canvas_size), (0, 0, 0, 0))
             
-            # Cola a marca d'água repetidas vezes nesse canvas formando a grade
             padding_x = 40
             padding_y = 60
 
@@ -204,17 +197,12 @@ def processar_preview_video(video_id):
             
             canvas.save(caminho_wm_tiled, 'PNG')
 
-        # =================================================================
-        # COMANDO FFMPEG (Agora super simples e à prova de falhas)
-        # =================================================================
-        # scale=-2:720 -> Mantém a proporção exata, mas com mais resolução para evitar o zoom
-        # overlay -> Joga o canvas gigante no meio do vídeo. O que sobrar para fora, é ignorado.
         filtro_ffmpeg = "[0:v]scale=-2:720[bg];[bg][1:v]overlay=0:0"
 
         comando = [
             'ffmpeg', '-y',
             '-i', caminho_original,
-            '-i', caminho_wm_tiled, # Usa o lençol gigante que criamos acima
+            '-i', caminho_wm_tiled,
             '-t', '10',
             '-filter_complex', filtro_ffmpeg,
             '-an',
@@ -225,7 +213,6 @@ def processar_preview_video(video_id):
 
         subprocess.run(comando, check=True)
 
-        # 3. Salva no banco de dados
         with open(caminho_preview_temp, 'rb') as f:
             video.arquivo_preview.save(nome_preview, ContentFile(f.read()), save=True)
 
@@ -236,7 +223,6 @@ def processar_preview_video(video_id):
         return False
         
     finally:
-        # 4. Limpeza rigorosa para manter o seu servidor Hetzner rodando leve
         if caminho_original and os.path.exists(caminho_original):
             os.remove(caminho_original)
         if caminho_preview_temp and os.path.exists(caminho_preview_temp):
@@ -244,9 +230,6 @@ def processar_preview_video(video_id):
         if caminho_wm_tiled and os.path.exists(caminho_wm_tiled):
             os.remove(caminho_wm_tiled)
 
-# ====================================================================
-# TAREFA: FTP PARA FOTOS SALVAS NO SITE (Envio Direto / Sem Alteração)
-# ====================================================================
 @shared_task
 def distribuir_foto_para_ftps(foto_id, jornais_ids=None, metadados=None):
     try:
@@ -277,25 +260,21 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None, metadados=None):
                     
                 ftp.login(user=parceiro.ftp_user, passwd=parceiro.ftp_password)
                 
-                # 🚀 INÍCIO DA LÓGICA DE PASTA INTELIGENTE
                 pasta_alvo = parceiro.ftp_pasta.strip()
                 if not pasta_alvo or pasta_alvo == '/':
-                    pasta_alvo = 'Acesso_Imagens' # Nome da pasta se o parceiro não definir nenhuma
+                    pasta_alvo = 'Acesso_Imagens' 
 
                 try:
-                    ftp.cwd(pasta_alvo) # Tenta entrar na pasta
+                    ftp.cwd(pasta_alvo) 
                 except ftplib.error_perm:
-                    # Se não existe, tenta criar
                     try:
                         ftp.mkd(pasta_alvo)
                         ftp.cwd(pasta_alvo)
                     except ftplib.error_perm:
-                        # FALLBACK SEGURANÇA: Se não tiver permissão para criar, usa a raiz
                         try:
                             ftp.cwd('/')
                         except:
-                            pass # Fica no diretório padrão de login
-                # 🚀 FIM DA LÓGICA DE PASTA INTELIGENTE
+                            pass 
 
                 ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_data))
                 ftp.quit()
@@ -310,18 +289,16 @@ def distribuir_foto_para_ftps(foto_id, jornais_ids=None, metadados=None):
     except Exception as e:
         return f"Erro crítico na distribuição: {str(e)}"
 
-
-# ====================================================================
-# TAREFA: FTP PARA FOTOS TEMPORÁRIAS (Envio Direto / Sem Alteração)
-# ====================================================================
 @shared_task
 def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
     try:
+        # 🚨 MUDANÇA 2: Adicionar o Endpoint URL para o boto3 encontrar o Cloudflare R2
         s3_client = boto3.client(
             's3', 
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID, 
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY, 
-            region_name=settings.AWS_S3_REGION_NAME
+            region_name=settings.AWS_S3_REGION_NAME,
+            endpoint_url=settings.AWS_S3_ENDPOINT_URL 
         )
         bucket_name = settings.AWS_STORAGE_BUCKET_NAME
 
@@ -346,7 +323,6 @@ def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
                     
                 ftp.login(user=parceiro.ftp_user, passwd=parceiro.ftp_password)
                 
-                # 🚀 INÍCIO DA LÓGICA DE PASTA INTELIGENTE (Cópia idêntica)
                 pasta_alvo = parceiro.ftp_pasta.strip()
                 if not pasta_alvo or pasta_alvo == '/':
                     pasta_alvo = 'Acesso_Imagens'
@@ -362,7 +338,6 @@ def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
                             ftp.cwd('/')
                         except:
                             pass
-                # 🚀 FIM DA LÓGICA DE PASTA INTELIGENTE
 
                 ftp.storbinary(f'STOR {nome_arquivo}', BytesIO(img_data))
                 ftp.quit()
@@ -376,3 +351,73 @@ def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
 
     except Exception as e:
         return f"Erro crítico na distribuição temporária: {str(e)}"
+
+@shared_task
+def apagar_midias_antigas_task(fotos_ids_list, videos_ids_list):
+    """
+    Tarefa de limpeza profunda. 
+    1. Apaga os Vínculos Pendentes (Carrinhos Abandonados)
+    2. Apaga do Amazon Rekognition
+    3. Apaga da Cloudflare R2
+    4. Apaga do Banco de Dados
+    """
+    try:
+        rekognition_client = boto3.client(
+            'rekognition',
+            aws_access_key_id=settings.AWS_REKOGNITION_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_REKOGNITION_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_REKOGNITION_REGION_NAME
+        )
+    except Exception as e:
+        print(f"Erro ao conectar com Rekognition na limpeza: {e}")
+        return False
+
+    # --- 1. LIMPEZA DE FOTOS ---
+    if fotos_ids_list:
+        print(f"--- [CELERY] Apagando {len(fotos_ids_list)} fotos mortas ---")
+        fotos = Foto.objects.filter(id__in=fotos_ids_list)
+        
+        for foto in fotos:
+            try:
+                # 🚨 PASSO NOVO: Quebrar a fechadura! 
+                # Apaga os ItemPedidos que estão segurando a foto (desde que não estejam PAGOS)
+                ItemPedido.objects.filter(foto=foto).exclude(
+                    Q(pedido__status='PAGO') | Q(pedido__status='CONCLUIDO')
+                ).delete()
+
+                # A. Apagar Assinaturas Faciais da Amazon IA
+                faces = FaceIndexada.objects.filter(foto=foto)
+                face_ids = [face.rekognition_face_id for face in faces if face.rekognition_face_id]
+                
+                if face_ids:
+                    rekognition_client.delete_faces(
+                        CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
+                        FaceIds=face_ids
+                    )
+                
+                # B. Apagar do R2 e Banco de Dados (Agora vai funcionar!)
+                foto.delete()
+                print(f"Foto {foto.id} apagada com sucesso!")
+                
+            except Exception as e:
+                print(f"Falha ao apagar Foto {foto.id}: {e}")
+
+    # --- 2. LIMPEZA DE VÍDEOS ---
+    if videos_ids_list:
+         print(f"--- [CELERY] Apagando {len(videos_ids_list)} vídeos mortos ---")
+         videos = Video.objects.filter(id__in=videos_ids_list)
+         
+         for video in videos:
+             try:
+                 # 🚨 PASSO NOVO: Quebrar a fechadura para os vídeos
+                 ItemPedido.objects.filter(video=video).exclude(
+                     Q(pedido__status='PAGO') | Q(pedido__status='CONCLUIDO')
+                 ).delete()
+
+                 # Apaga do R2 e Banco de Dados
+                 video.delete()
+                 print(f"Vídeo {video.id} apagado com sucesso!")
+             except Exception as e:
+                 print(f"Falha ao apagar Vídeo {video.id}: {e}")
+
+    return f"Limpeza finalizada! {len(fotos_ids_list)} fotos e {len(videos_ids_list)} vídeos apagados."

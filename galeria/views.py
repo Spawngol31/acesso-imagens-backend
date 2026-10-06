@@ -3,6 +3,9 @@
 import boto3
 import uuid
 import os
+from PIL import Image, ImageOps
+from io import BytesIO
+from .models import Album, Foto, Video
 from django.db.models import Sum, Count, Q, Value
 from django.db.models.functions import Coalesce
 from django.core.files.base import ContentFile
@@ -10,13 +13,12 @@ from django.conf import settings
 from rest_framework import generics, viewsets, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework.decorators import action, api_view, permission_classes
 from decimal import Decimal, InvalidOperation
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from PIL import Image, ImageOps
-from io import BytesIO
+from .tasks import apagar_midias_antigas_task
 
 # Importa as tasks
 from .tasks import distribuir_foto_para_ftps, distribuir_foto_temporaria_ftp, processar_preview_video
@@ -175,11 +177,13 @@ class GeneratePresignedUrlView(APIView):
             # Assumimos que é foto por padrão
             unique_file_key = f"media_private/fotos/{uuid_hex}{ext}"
 
+        # 🚨 AQUI ESTÁ A CORREÇÃO: Adicionamos o endpoint_url do Cloudflare
         s3_client = boto3.client(
             's3',
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
             region_name=settings.AWS_S3_REGION_NAME,
+            endpoint_url=settings.AWS_S3_ENDPOINT_URL, 
             config=boto3.session.Config(signature_version='s3v4')
         )
 
@@ -303,10 +307,22 @@ class AlbumViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsFotografoOrAdmin]
 
     def get_queryset(self):
+        # 1. Pega todos os álbuns inicialmente
         queryset = Album.objects.all()
+
+        # 🚀 2. NOVA LÓGICA: Lê o parâmetro ?is_arquivado da URL do React
+        arquivado_str = self.request.query_params.get('is_arquivado')
+        if arquivado_str is not None:
+            if arquivado_str.lower() == 'false':
+                queryset = queryset.filter(is_arquivado=False)
+            elif arquivado_str.lower() == 'true':
+                queryset = queryset.filter(is_arquivado=True)
+
+        # 3. Mantém a sua regra de segurança atual (Fotógrafo só vê os dele)
         if self.request.user.papel != 'ADMIN':
             queryset = queryset.filter(fotografo=self.request.user)
 
+        # 4. Mantém as suas anotações matemáticas perfeitas
         return queryset.annotate(
             qtd_vendida=Count(
                 'fotos__itempedido',
@@ -495,3 +511,52 @@ class AvaliacaoViewSet(viewsets.ModelViewSet):
     queryset = Avaliacao.objects.all().order_by('-criado_em')
     serializer_class = AvaliacaoSerializer
     permission_classes = [IsAuthenticated, IsAdminUser]
+
+class ArquivarAlbunsEmMassaView(APIView):
+    """
+    Recebe uma lista de IDs do React, arquiva os álbuns e manda
+    as mídias não vendidas para o Celery apagar.
+    """
+    permission_classes = [IsAdminUser] # 🛡️ Proteção de Segurança Máxima
+
+    def post(self, request):
+        album_ids = request.data.get('album_ids', [])
+        
+        if not album_ids:
+            return Response({'error': 'Nenhum álbum foi selecionado.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        albuns = Album.objects.filter(id__in=album_ids)
+        total_fotos_apagadas = 0
+        total_videos_apagados = 0
+        albuns_processados = 0
+
+        for album in albuns:
+            # 1. Filtra mídias não vendidas
+            fotos_sem_venda = Foto.objects.filter(album=album).exclude(
+                Q(itempedido__pedido__status='PAGO') | Q(itempedido__pedido__status='CONCLUIDO')
+            ).values_list('id', flat=True)
+
+            videos_sem_venda = Video.objects.filter(album=album).exclude(
+                Q(itempedido__pedido__status='PAGO') | Q(itempedido__pedido__status='CONCLUIDO')
+            ).values_list('id', flat=True)
+
+            fotos_ids = list(fotos_sem_venda)
+            videos_ids = list(videos_sem_venda)
+
+            total_fotos_apagadas += len(fotos_ids)
+            total_videos_apagados += len(videos_ids)
+
+            # 2. Envia para o Celery
+            if fotos_ids or videos_ids:
+                apagar_midias_antigas_task.delay(fotos_ids, videos_ids)
+
+            # 3. Arquiva o Álbum
+            album.is_arquivado = True
+            album.save()
+            albuns_processados += 1
+
+        return Response({
+            'message': f'Sucesso! {albuns_processados} álbuns arquivados.',
+            'fotos_apagadas': total_fotos_apagadas,
+            'videos_apagados': total_videos_apagados
+        }, status=status.HTTP_200_OK)

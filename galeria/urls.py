@@ -15,7 +15,8 @@ from .views import (
     album_share_preview,
     StatusFilaProcessamentoView,
     AvaliacaoViewSet,
-    avaliacoes_destaques
+    avaliacoes_destaques,
+    ArquivarAlbunsEmMassaView
 )
 
 # Roteador para os endpoints do painel (Dashboard)
@@ -49,4 +50,5 @@ urlpatterns = [
     path('dashboard/status-fila/', StatusFilaProcessamentoView.as_view(), name='status-fila'),
     
     path('dashboard/', include(dashboard_router.urls)),
+    path('albuns/arquivar-em-massa/', ArquivarAlbunsEmMassaView.as_view(), name='arquivar-albuns-massa'),
 ]

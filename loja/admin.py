@@ -1,12 +1,15 @@
 # loja/admin.py
 
 import csv
+import datetime
 from django.http import HttpResponse
 from django.contrib import admin, messages
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from .models import Pedido, ItemPedido, FotoComprada, Cupom
+from galeria.models import Album, Foto, Video
+from galeria.tasks import apagar_midias_antigas_task
 from django.utils import timezone
-from rangefilter.filters import DateRangeFilter # <-- IMPORT NOVO PARA O CALENDÁRIO
+from rangefilter.filters import DateRangeFilter
 from django.utils.html import format_html, strip_tags
 from django.urls import reverse
 from django.conf import settings
@@ -232,6 +235,30 @@ class PedidoAdmin(admin.ModelAdmin):
         return getattr(obj, 'metodo_pagamento', 'Não informado')
     get_metodo_pagamento.short_description = 'Forma de Pgto'
 
+# --- NOVA AÇÃO MÁGICA: LIMPAR ITENS SELECIONADOS NA TELA ---
+@admin.action(description='APAGAR Itens Selecionados e Limpar Mídias')
+def iniciar_limpeza_midias_antigas(modeladmin, request, queryset):
+    
+    # 1. O queryset são EXATAMENTE as caixinhas que você marcou na tela!
+    # Filtramos apenas os que estão PENDENTES para você não apagar uma venda paga sem querer.
+    itens_pendentes = queryset.filter(pedido__status='PENDENTE')
+    total_itens = itens_pendentes.count()
+    
+    if total_itens == 0:
+        messages.info(request, "Nenhum item PENDENTE selecionado para limpeza. Verifique as caixinhas.")
+        return
+
+    # 2. Descobrir quais fotos/vídeos estão amarrados a esses itens selecionados
+    fotos_para_apagar = list(itens_pendentes.exclude(foto__isnull=True).values_list('foto__id', flat=True))
+    videos_para_apagar = list(itens_pendentes.exclude(video__isnull=True).values_list('video__id', flat=True))
+
+    # 3. Mandar o Celery destruir os arquivos físicos e as IA's
+    apagar_midias_antigas_task.delay(fotos_para_apagar, videos_para_apagar)
+
+    # 4. A MÁGICA DA TELA: Apagar as linhas da tabela que você selecionou
+    itens_pendentes.delete()
+
+    messages.success(request, f"🚀 Limpeza Concluída! {total_itens} carrinhos abandonados foram apagados da sua tela. O Celery está destruindo as mídias em segundo plano.")
 
 # --- PAINEL FINANCEIRO DOS FOTÓGRAFOS ---
 @admin.register(ItemPedido)
@@ -249,7 +276,7 @@ class ItemPedidoAdmin(admin.ModelAdmin):
     
     list_filter = (('pedido__criado_em', DateRangeFilter), FotografoFilter, 'pedido__status')
     search_fields = ('foto__album__fotografo__email', 'pedido__id')
-    actions = [exportar_pagamento_csv]
+    actions = [exportar_pagamento_csv, iniciar_limpeza_midias_antigas]
 
     # 🚀 1. OTIMIZAÇÕES EXTRAS DE VELOCIDADE
     list_per_page = 30 
