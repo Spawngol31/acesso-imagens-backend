@@ -23,7 +23,12 @@ class Command(BaseCommand):
             self.stdout.write(self.style.SUCCESS("✨ O cofre da IA está otimizado. Nenhum rosto antigo encontrado."))
             return
 
-        client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
+        client = boto3.client(
+            'rekognition', 
+            region_name=settings.AWS_REKOGNITION_REGION_NAME,
+            aws_access_key_id=settings.AWS_REKOGNITION_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_REKOGNITION_SECRET_ACCESS_KEY
+        )
         
         # 🚀 MÁGICA 1: Lotes pequenos de 250 rostos (A AWS processa instantaneamente sem engasgar)
         lotes = [lista_rostos[i:i + 250] for i in range(0, len(lista_rostos), 250)]
