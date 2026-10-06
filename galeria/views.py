@@ -110,7 +110,12 @@ class BuscaFacialView(APIView):
                 image_bytes = buffer.getvalue() # Salva a imagem processada
 
             # 2. CHAMADA AO REKOGNITION (Usando os bytes processados)
-            rekognition_client = boto3.client('rekognition', region_name=settings.AWS_REKOGNITION_REGION_NAME)
+            rekognition_client = boto3.client(
+                'rekognition', 
+                region_name=settings.AWS_REKOGNITION_REGION_NAME,
+                aws_access_key_id=settings.AWS_REKOGNITION_ACCESS_KEY_ID,
+                aws_secret_access_key=settings.AWS_REKOGNITION_SECRET_ACCESS_KEY
+            )
             response = rekognition_client.search_faces_by_image(
                 CollectionId=settings.AWS_REKOGNITION_COLLECTION_ID,
                 Image={'Bytes': image_bytes},
