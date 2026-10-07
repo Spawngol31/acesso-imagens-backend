@@ -1,9 +1,11 @@
 # loja/serializers.py
 
+import boto3
 from decimal import Decimal
 from rest_framework import serializers
 from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, PropostaCompra, SolicitacaoSaque
 from galeria.models import Foto, Video
+from django.conf import settings
 # Não precisamos mais de importar o FotoSerializer da galeria
 
 # --- SERIALIZER DE CUPOM (CORRETO) ---
@@ -172,10 +174,55 @@ class CarrinhoSerializer(serializers.ModelSerializer):
 
 # --- SERIALIZERS DE PEDIDO E VENDAS (CORRIGIDO) ---
 class ItemPedidoSerializer(serializers.ModelSerializer):
-    foto = FotoParaLojaSerializer(read_only=True) # <-- Usa o serializer leve
+    foto = FotoParaLojaSerializer(read_only=True) 
+    url_download = serializers.SerializerMethodField() # <-- ADICIONADO: O link de download real
+
     class Meta:
         model = ItemPedido
-        fields = ['id', 'foto', 'preco'] # Adicionado 'id' para consistência
+        fields = ['id', 'foto', 'preco', 'url_download']
+
+    def get_url_download(self, obj):
+        """
+        Gera uma Presigned URL segura de download APENAS se o pedido estiver PAGO.
+        Aponta obrigatoriamente para a Cloudflare R2.
+        """
+        if obj.pedido.status != 'PAGO':
+            return None
+
+        # Confirma qual é o arquivo (Foto ou Vídeo)
+        arquivo_media = None
+        if obj.foto and obj.foto.imagem:
+            arquivo_media = obj.foto.imagem
+        elif obj.video and obj.video.arquivo_video:
+            arquivo_media = obj.video.arquivo_video
+
+        if not arquivo_media:
+            return None
+
+        # 🚨 CRIAR O CLIENTE R2 CORRETO 🚨
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=settings.AWS_S3_ENDPOINT_URL,
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_S3_REGION_NAME,
+            config=boto3.session.Config(signature_version='s3v4')
+        )
+        
+        caminho_banco = arquivo_media.name
+        nome_arquivo = caminho_banco.split('/')[-1]
+        caminho_s3 = f"media_private/{caminho_banco}".replace('//', '/')
+        
+        url = s3_client.generate_presigned_url(
+            ClientMethod='get_object',
+            Params={
+                'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+                'Key': caminho_s3,
+                'ResponseContentDisposition': f'attachment; filename="{nome_arquivo}"'
+            },
+            ExpiresIn=3600 # O link expira em 1 hora para segurança
+        )
+        return url
 
 class PedidoSerializer(serializers.ModelSerializer):
     itens = ItemPedidoSerializer(many=True, read_only=True)

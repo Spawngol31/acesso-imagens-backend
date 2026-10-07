@@ -185,10 +185,10 @@ class GeneratePresignedUrlView(APIView):
         # 🚨 AQUI ESTÁ A CORREÇÃO: Adicionamos o endpoint_url do Cloudflare
         s3_client = boto3.client(
             's3',
+            endpoint_url=settings.AWS_S3_ENDPOINT_URL,
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
             region_name=settings.AWS_S3_REGION_NAME,
-            endpoint_url=settings.AWS_S3_ENDPOINT_URL, 
             config=boto3.session.Config(signature_version='s3v4')
         )
 
@@ -433,11 +433,14 @@ class FotoViewSet(viewsets.ModelViewSet):
     def baixar_original(self, request, pk=None):
         foto = self.get_object() 
         
+        # 🚨 CORREÇÃO: Adicionados o endpoint_url e o signature_version para a Cloudflare R2
         s3_client = boto3.client(
             's3',
+            endpoint_url=settings.AWS_S3_ENDPOINT_URL, 
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            region_name=settings.AWS_S3_REGION_NAME
+            region_name=settings.AWS_S3_REGION_NAME,
+            config=boto3.session.Config(signature_version='s3v4')
         )
         
         caminho_banco = foto.imagem.name
