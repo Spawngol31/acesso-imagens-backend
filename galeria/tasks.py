@@ -101,12 +101,23 @@ def processar_foto_task(foto_id):
                     for x in range(0, img_width, wm_width + PADDING_X):
                         final_image.paste(watermark, (x, y), mask=watermark)
 
-                buffer_final = BytesIO()
-                final_image.convert("RGB").save(buffer_final, format='JPEG', quality=90)
-                buffer_final.seek(0)
+            buffer_final = BytesIO()
+            final_image.convert("RGB").save(buffer_final, format='JPEG', quality=90)
+            buffer_final.seek(0)
+            
+            file_name = os.path.basename(foto.imagem.name)
+            
+            foto.miniatura_marca_dagua.save(file_name, ContentFile(buffer_final.read()), save=True)
+            
+            #criação capa do album caso não exista
+            album = foto.album
+            if not album.capa:
+                # Volta o "ponteiro" do ficheiro para o início para podermos ler a imagem de novo
+                buffer_final.seek(0) 
                 
-                file_name = os.path.basename(foto.imagem.name)
-                foto.miniatura_marca_dagua.save(file_name, ContentFile(buffer_final.read()), save=True)
+                nome_capa = f"capa_album_{album.id}_{file_name}"
+                album.capa.save(nome_capa, ContentFile(buffer_final.read()), save=True)
+                print(f"--- [CELERY] Capa do Álbum {album.id} definida automaticamente! ---")
 
         img_original.close()
         print(f"--- [CELERY] Processamento completo para Foto ID: {foto.id} ---")

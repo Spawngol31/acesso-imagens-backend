@@ -372,9 +372,29 @@ class AlbumViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def arquivar(self, request, pk=None):
         album = self.get_object()
+        
+        # 1. Encontra fotos e vídeos NÃO VENDIDOS apenas deste álbum
+        fotos_sem_venda = album.fotos.exclude(
+            Q(itempedido__pedido__status='PAGO') | Q(itempedido__pedido__status='CONCLUIDO')
+        ).values_list('id', flat=True)
+
+        videos_sem_venda = album.videos.exclude(
+            Q(itempedido__pedido__status='PAGO') | Q(itempedido__pedido__status='CONCLUIDO')
+        ).values_list('id', flat=True)
+
+        fotos_ids = list(fotos_sem_venda)
+        videos_ids = list(videos_sem_venda)
+
+        # 2. Envia para o Celery apagar a comunicação com a R2 e AWS Rekognition
+        if fotos_ids or videos_ids:
+            apagar_midias_antigas_task.delay(fotos_ids, videos_ids)
+
+        # 3. Arquiva o álbum no painel
         album.is_arquivado = True
         album.save()
-        return Response({'status': 'álbum arquivado'})
+
+        mensagem_sucesso = f"Álbum arquivado com sucesso! Limpando {len(fotos_ids)} fotos da nuvem."
+        return Response({'status': mensagem_sucesso})
 
     @action(detail=True, methods=['post'])
     def desarquivar(self, request, pk=None):
