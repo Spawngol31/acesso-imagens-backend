@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.pagination import PageNumberPagination
 from decimal import Decimal, InvalidOperation
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -45,14 +46,34 @@ from contas.models import Usuario
 # --- VIEWS PÚBLICAS (PARA OS CLIENTES) ---
 # =========================================================
 
+class AlbumPublicoPagination(PageNumberPagination):
+    page_size = 20 # Manda apenas 20 álbuns por página
+    page_size_query_param = 'page_size'
+    max_page_size = 100
+
 class AlbumListView(generics.ListAPIView):
     queryset = Album.objects.filter(
         is_publico=True, 
         is_arquivado=False
     ).select_related('fotografo').order_by('-data_evento')
-    
+
+    pagination_class = AlbumPublicoPagination
     serializer_class = AlbumSerializer
     permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        # 🚀 OTIMIZAÇÃO: Usa o select_related para evitar o problema N+1 e filtra por pesquisa
+        queryset = Album.objects.filter(
+            is_publico=True, 
+            is_arquivado=False
+        ).select_related('fotografo').order_by('-data_evento')
+
+        # Se o React enviar um termo de pesquisa na URL, o Django filtra direto na base de dados!
+        search_term = self.request.query_params.get('search', None)
+        if search_term:
+            queryset = queryset.filter(titulo__icontains=search_term)
+
+        return queryset
 
 class AlbumDetailView(generics.RetrieveAPIView):
     serializer_class = AlbumDetailSerializer
