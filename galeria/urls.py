@@ -16,7 +16,8 @@ from .views import (
     StatusFilaProcessamentoView,
     AvaliacaoViewSet,
     avaliacoes_destaques,
-    ArquivarAlbunsEmMassaView
+    ArquivarAlbunsEmMassaView, 
+    ListaFotografosAtivosView
 )
 
 # Roteador para os endpoints do painel (Dashboard)
@@ -30,6 +31,7 @@ dashboard_router.register(r'avaliacoes', AvaliacaoViewSet, basename='dashboard-a
 urlpatterns = [
     # URLs Públicas (para clientes)
     path('albuns/', AlbumListView.as_view(), name='album-list'),
+    path('fotografos-ativos/', ListaFotografosAtivosView.as_view(), name='fotografos-ativos'),
     path('albuns/<int:id>/', AlbumDetailView.as_view(), name='album-detail'),
     path('fotos/busca-facial/', BuscaFacialView.as_view(), name='busca-facial'),
     

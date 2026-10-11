@@ -6,6 +6,7 @@ import os
 from PIL import Image, ImageOps
 from io import BytesIO
 from .models import Album, Foto, Video
+from contas.models import Usuario
 from django.db.models import Sum, Count, Q, Value
 from django.db.models.functions import Coalesce
 from django.core.files.base import ContentFile
@@ -62,18 +63,40 @@ class AlbumListView(generics.ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        # 🚀 OTIMIZAÇÃO: Usa o select_related para evitar o problema N+1 e filtra por pesquisa
         queryset = Album.objects.filter(
             is_publico=True, 
             is_arquivado=False
         ).select_related('fotografo').order_by('-data_evento')
 
-        # Se o React enviar um termo de pesquisa na URL, o Django filtra direto na base de dados!
+        # 1. Pesquisa Principal (Nome do Álbum)
         search_term = self.request.query_params.get('search', None)
         if search_term:
             queryset = queryset.filter(titulo__icontains=search_term)
 
+        # 2. Filtro Avançado: Fotógrafo (Agora recebe o ID exato da caixa de seleção)
+        fotografo_id = self.request.query_params.get('fotografo_id', None)
+        if fotografo_id:
+            queryset = queryset.filter(fotografo__id=fotografo_id)
+            
+        # 3. Filtro Avançado: Local do Evento
+        local_str = self.request.query_params.get('local', None)
+        if local_str:
+            queryset = queryset.filter(local__icontains=local_str)
+            
+        # 4. Filtro Avançado: Data do Evento
+        data_str = self.request.query_params.get('data', None)
+        if data_str:
+            queryset = queryset.filter(data_evento=data_str)
+
         return queryset
+
+class ListaFotografosAtivosView(APIView):
+    permission_classes = [AllowAny]
+    
+    def get(self, request):
+        # Pega apenas os utilizadores que são FOTÓGRAFOS
+        fotografos = Usuario.objects.filter(papel=Usuario.Papel.FOTOGRAFO).values('id', 'nome_completo', 'email')
+        return Response(list(fotografos))
 
 class AlbumDetailView(generics.RetrieveAPIView):
     serializer_class = AlbumDetailSerializer
