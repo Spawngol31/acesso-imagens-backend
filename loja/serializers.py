@@ -8,15 +8,20 @@ from galeria.models import Foto, Video
 from django.conf import settings
 # Não precisamos mais de importar o FotoSerializer da galeria
 
-# --- SERIALIZER DE CUPOM (CORRETO) ---
 class CupomSerializer(serializers.ModelSerializer):
+    albuns_titulos = serializers.SerializerMethodField(read_only=True)
+
     class Meta:
         model = Cupom
-        fields = ['id', 'codigo', 'desconto_percentual', 'ativo', 'data_validade']
+        fields = ['id', 'codigo', 'desconto_percentual', 'ativo', 'data_validade', 'albuns', 'albuns_titulos']
+        extra_kwargs = {
+            'albuns': {'required': False} # Se não enviar nada, vale para todos os álbuns do fotógrafo
+        }
 
-# --- NOVO SERIALIZER "LEVE" PARA FOTOS (OTIMIZADO) ---
-# Este serializer é usado apenas para o carrinho e pedidos.
-# Ele usa o .url público da miniatura, que é muito mais rápido.
+    def get_albuns_titulos(self, obj):
+        # Retorna uma lista com os títulos dos álbuns vinculados (vazio = Todos os álbuns)
+        return [album.titulo for album in obj.albuns.all()]
+
 class FotoParaLojaSerializer(serializers.ModelSerializer):
     imagem_url = serializers.SerializerMethodField()
     album_titulo = serializers.CharField(source='album.titulo', read_only=True) # <-- NOVO
@@ -155,20 +160,20 @@ class CarrinhoSerializer(serializers.ModelSerializer):
 
         # 2. Depois aplicamos a lógica do Cupom (se existir e for válido)
         if obj.cupom and obj.cupom.is_valido():
-            fotografo_dono_cupom = obj.cupom.fotografo
             percentual_cupom = obj.cupom.desconto_percentual / Decimal('100.0')
 
             for item in obj.itens.all():
                 media = item.foto or item.video
-                if not media: continue
+                if not media:
+                    continue
 
-                fotografo_da_foto = media.album.fotografo
-                if fotografo_da_foto == fotografo_dono_cupom:
+                # 👇 Verifica se o cupom vale para o álbum específico desta foto/vídeo
+                if obj.cupom.is_valido_para_album(media.album):
                     valor_desconto_item = media.preco * percentual_cupom
                     desconto_total += valor_desconto_item
                     
         return round(desconto_total, 2)
-    
+
     def get_total(self, obj):
         return self.get_subtotal(obj) - self.get_desconto(obj)
 

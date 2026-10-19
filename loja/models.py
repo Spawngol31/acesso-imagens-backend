@@ -4,7 +4,7 @@ from django.db import models
 from django.utils import timezone
 from datetime import timedelta
 from contas.models import Usuario
-from galeria.models import Foto, Video
+from galeria.models import Foto, Video, Album
 
 class Carrinho(models.Model):
     cliente = models.OneToOneField(Usuario, on_delete=models.CASCADE, related_name='carrinho')
@@ -52,27 +52,16 @@ class Pedido(models.Model):
     criado_em = models.DateTimeField(auto_now_add=True)
 
     def save(self, *args, **kwargs):
-        # 1. Primeiro, salvamos o pedido normalmente para garantir que o "PAGO" foi gravado
         super().save(*args, **kwargs)
 
-        # 2. Em seguida, verificamos: O status agora é PAGO?
-        # (⚠️ Importante: Verifique se no seu modelo a sigla é 'PAGO' em maiúsculo, ou 'pago', etc)
         if self.status == 'PAGO':
-            
-            # Importamos aqui dentro para evitar erros de "Importação Circular" do Django
+
             from .models import FotoComprada 
 
-            # 3. Pegamos todos os itens (fotos) que estão dentro deste pedido
-            # Se você usar um 'related_name' no ItemPedido, mude para self.itens.all()
-            # O padrão do Django é usar nome_do_modelo_set
             itens_do_pedido = self.itens.all() 
             
-            # 4. Para cada foto no carrinho, criamos o acesso do cliente
             for item in itens_do_pedido:
                 
-                # Usamos o get_or_create em vez de .create() por segurança! 
-                # Se você salvar o pedido "PAGO" duas vezes no admin sem querer, 
-                # ele não vai duplicar a foto na área do cliente.
                 FotoComprada.objects.get_or_create(
                     cliente=self.cliente,
                     foto=item.foto
@@ -128,8 +117,6 @@ class Cupom(models.Model):
     ativo = models.BooleanField(default=True)
     data_validade = models.DateField(blank=True, null=True)
     
-    # --- CAMPO CORRIGIDO ---
-    # Removemos null=True e blank=True. Um cupom DEVE pertencer a um fotógrafo.
     fotografo = models.ForeignKey(
         Usuario, 
         on_delete=models.CASCADE, 
@@ -137,6 +124,13 @@ class Cupom(models.Model):
         limit_choices_to={'papel': Usuario.Papel.FOTOGRAFO}
         # null=True, # Removido
         # blank=True # Removido
+    )
+
+    albuns = models.ManyToManyField(
+        Album, # Se o model Album estiver em outro app, use 'nome_do_app.Album' ou importe a classe Album
+        blank=True,
+        related_name='cupons',
+        help_text="Se ficar em branco, o cupom vale para TODOS os álbuns deste fotógrafo. Se selecionar álbuns, valerá apenas para os selecionados."
     )
 
     def __str__(self):
@@ -147,6 +141,24 @@ class Cupom(models.Model):
             return False
         if self.data_validade and self.data_validade < timezone.now().date():
             return False
+        return True
+
+    def is_valido_para_album(self, album):
+        """
+        Verifica se o cupom pode ser aplicado a uma foto de um determinado álbum.
+        """
+        if not self.is_valido():
+            return False
+            
+        # Garante que o álbum pertence ao fotógrafo dono do cupom
+        if album.fotografo != self.fotografo:
+            return False
+            
+        # Se o fotógrafo selecionou álbuns específicos, verifica se este álbum está na lista
+        if self.albuns.exists():
+            return self.albuns.filter(id=album.id).exists()
+            
+        # Se não selecionou nenhum álbum específico, vale para qualquer álbum deste fotógrafo
         return True
     
     # --- 2. O NOVO MODELO DE RECIBOS/HISTÓRICO ---

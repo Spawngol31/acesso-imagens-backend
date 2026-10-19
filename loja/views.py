@@ -105,10 +105,16 @@ class AplicarCupomView(APIView):
         if not cupom.is_valido():
             return Response({"error": "Este cupom não é mais válido."}, status=status.HTTP_400_BAD_REQUEST)
         
-        tem_foto_valida = any(item.foto.album.fotografo == cupom.fotografo for item in carrinho.itens.all())
+        tem_item_valido = any(
+            (item.foto or item.video) and cupom.is_valido_para_album((item.foto or item.video).album)
+            for item in carrinho.itens.all()
+        )
         
-        if not tem_foto_valida:
-            return Response({"error": "Este cupom não é válido para nenhuma das fotos no seu carrinho."}, status=status.HTTP_400_BAD_REQUEST)
+        if not tem_item_valido:
+            return Response(
+                {"error": "Este cupom não é válido para os álbuns das mídias no seu carrinho."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         carrinho.cupom = cupom
         carrinho.save()
@@ -130,15 +136,15 @@ class MercadoPagoCheckoutView(APIView):
             if total <= 0:
                 return Response({"error": "O valor total do pedido deve ser positivo."}, status=status.HTTP_400_BAD_REQUEST)
 
-            # 1. Cria o Pedido (MANTENHA ESTA PARTE IGUAL)
+            # 1. Cria o Pedido
             pedido = Pedido.objects.create(
                 cliente=request.user,
-                valor_total=Decimal(total)
+                valor_total=Decimal(str(total))
             )
             
             itens_do_pedido = []
             
-            # --- NOVO LOOP CORRIGIDO AQUI ---
+            # --- LOOP DOS ITENS DO CARRINHO ---
             for item_carrinho in carrinho.itens.all():
                 
                 # 1. Descobre se o item é uma foto ou um vídeo
@@ -155,15 +161,21 @@ class MercadoPagoCheckoutView(APIView):
                 else:
                     continue # Ignora se por algum motivo houver um item vazio
 
-                # 2. Salva o item no Banco de Dados com a mídia correta
+                # 2. Aplica o desconto do cupom APENAS se valer para o álbum desta mídia
+                midia_atual = foto_obj or video_obj
+                if carrinho.cupom and carrinho.cupom.is_valido_para_album(midia_atual.album):
+                    fator_desconto = Decimal('1.00') - (carrinho.cupom.desconto_percentual / Decimal('100.0'))
+                    preco_item = round(preco_item * fator_desconto, 2)
+
+                # 3. Salva o item no Banco de Dados com a mídia e preço corretos
                 ItemPedido.objects.create(
                     pedido=pedido,
                     foto=foto_obj,
-                    video=video_obj, # Assumindo que o seu model ItemPedido já tem a coluna 'video'
+                    video=video_obj,
                     preco=preco_item
                 )
                 
-                # 3. Adiciona o item à lista que vai para o Mercado Pago
+                # 4. Adiciona o item à lista que vai para o Mercado Pago
                 itens_do_pedido.append({
                     "title": titulo_mp,
                     "quantity": 1,
@@ -195,20 +207,18 @@ class MercadoPagoCheckoutView(APIView):
             preference_response = sdk.preference().create(preference_data)
             
             if preference_response.get("status") not in [200, 201]:
-                 raise Exception(f"Mercado Pago recusou: {preference_response.get('response')}")
+                raise Exception(f"Mercado Pago recusou: {preference_response.get('response')}")
 
             preference = preference_response["response"]
             
-            # --- CORREÇÃO AQUI: Devolvemos também o order_id ---
             return Response({
                 'preference_id': preference['id'],
-                'order_id': str(pedido.id) # IMPORTANTE!
+                'order_id': str(pedido.id)
             })
 
         except Exception as e:
             print(f"ERRO CRÍTICO NO CHECKOUT: {str(e)}")
             return Response({'error': f"Erro no servidor: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
 
 class MercadoPagoProcessPaymentView(APIView):
     permission_classes = [IsAuthenticated, IsCliente]
