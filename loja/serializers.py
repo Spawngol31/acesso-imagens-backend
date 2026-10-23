@@ -5,6 +5,7 @@ from decimal import Decimal
 from rest_framework import serializers
 from .models import Carrinho, ItemCarrinho, Pedido, ItemPedido, Cupom, PropostaCompra, SolicitacaoSaque
 from galeria.models import Foto, Video
+from galeria.serializers import FotoSerializer, VideoSerializer
 from django.conf import settings
 # Não precisamos mais de importar o FotoSerializer da galeria
 
@@ -179,12 +180,17 @@ class CarrinhoSerializer(serializers.ModelSerializer):
 
 # --- SERIALIZERS DE PEDIDO E VENDAS (CORRIGIDO) ---
 class ItemPedidoSerializer(serializers.ModelSerializer):
-    foto = FotoParaLojaSerializer(read_only=True) 
+    # 1. Usa o serializer exato da foto
+    foto = FotoSerializer(read_only=True) 
+    
+    # 2. ADICIONADO: Usa o serializer exato do vídeo
+    video = VideoSerializer(read_only=True)
+
     url_download = serializers.SerializerMethodField() # <-- ADICIONADO: O link de download real
 
     class Meta:
         model = ItemPedido
-        fields = ['id', 'foto', 'preco', 'url_download']
+        fields = ['id', 'foto', 'video', 'preco', 'url_download']
 
     def get_url_download(self, obj):
         """
