@@ -3,6 +3,8 @@
 import boto3
 import uuid
 import os
+import re
+import unicodedata
 from PIL import Image, ImageOps
 from io import BytesIO
 from .models import Album, Foto, Video
@@ -215,18 +217,27 @@ class GeneratePresignedUrlView(APIView):
         if not file_name:
             return Response({'error': 'file_name obrigatório.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Trata o nome do ficheiro e gera um identificador único
-        ext = os.path.splitext(file_name)[1].lower()
-        uuid_hex = uuid.uuid4().hex
+        # 🚀 1. Separa o nome original da extensão (ex: "BRA-PEL 205" e ".jpg")
+        nome_base, ext = os.path.splitext(file_name)
+        ext = ext.lower()
+
+        # 🚀 2. Remove acentos, troca espaços por "_" e limpa símbolos especiais para não quebrar a URL no R2
+        nome_sem_acento = unicodedata.normalize('NFKD', nome_base).encode('ASCII', 'ignore').decode('ASCII')
+        nome_limpo = re.sub(r'[^a-zA-Z0-9_-]', '', re.sub(r'\s+', '_', nome_sem_acento)).lower()
+        if not nome_limpo:
+            nome_limpo = 'midia'
+
+        # 🚀 3. Gera um código curto de 8 caracteres para evitar que arquivos com mesmo nome se sobrescrevam
+        uuid_curto = uuid.uuid4().hex[:8]
+        nome_final = f"{nome_limpo}_{uuid_curto}{ext}"
         
-        # Decide a pasta destino na S3 (media_private para garantir segurança)
+        # Decide a pasta destino na R2 (media_private para garantir segurança)
         if tipo_arquivo == 'video':
-            unique_file_key = f"media_private/videos/{uuid_hex}{ext}"
+            unique_file_key = f"media_private/videos/{nome_final}"
         else:
             # Assumimos que é foto por padrão
-            unique_file_key = f"media_private/fotos/{uuid_hex}{ext}"
+            unique_file_key = f"media_private/fotos/{nome_final}"
 
-        # 🚨 AQUI ESTÁ A CORREÇÃO: Adicionamos o endpoint_url do Cloudflare
         s3_client = boto3.client(
             's3',
             endpoint_url=settings.AWS_S3_ENDPOINT_URL,

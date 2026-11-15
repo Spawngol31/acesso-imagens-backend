@@ -318,8 +318,6 @@ def distribuir_foto_temporaria_ftp(temp_s3_key, jornais_ids, metadados=None):
 
         parceiros = JornalParceiro.objects.filter(id__in=jornais_ids, ativo=True)
         nome_arquivo = temp_s3_key.split('/')[-1]
-        if '_' in nome_arquivo:
-            nome_arquivo = nome_arquivo.split('_', 1)[1]
 
         resultados = []
 
